@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"unicode/utf8"
 )
@@ -23,6 +24,9 @@ var ansiRE = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 var colorOn = func() bool {
 	if os.Getenv("NO_COLOR") != "" {
 		return false
+	}
+	if runtime.GOOS == "windows" && os.Getenv("WT_SESSION") == "" {
+		return false // legacy console: no ANSI colors
 	}
 	st, err := os.Stdout.Stat()
 	return err == nil && st.Mode()&os.ModeCharDevice != 0

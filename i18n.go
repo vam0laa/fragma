@@ -39,6 +39,7 @@ func T(key string, args ...any) string {
 
 var catalog = map[string]map[string]string{
 	"en": {
+		"os.unsupported": "this command is only available on Linux. On this system use: fragma proxy",
 		"fail.root":      "this needs root: sudo fragma %s",
 		"fail.copy":      "installing the binary: %v",
 		"fail.unit":      "writing the service file: %v",
@@ -112,6 +113,7 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 `,
 	},
 	"tr": {
+		"os.unsupported": "bu komut yalnızca Linux'ta var. Bu sistemde şunu kullan: fragma proxy",
 		"fail.root":      "bunun için yönetici yetkisi gerekir: sudo fragma %s",
 		"fail.copy":      "program kurulamadı: %v",
 		"fail.unit":      "servis dosyası yazılamadı: %v",

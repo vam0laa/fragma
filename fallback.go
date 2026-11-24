@@ -41,7 +41,11 @@ func (c *noFragCache) add(key string) {
 
 // isHangup is true when the peer closed or reset the connection.
 func isHangup(err error) bool {
-	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET) {
+		return true
+	}
+	var en syscall.Errno
+	return errors.As(err, &en) && (en == 10054 || en == 10053) // Windows: WSAECONNRESET, WSAECONNABORTED
 }
 
 // sendHello writes the client's first TLS record to up and returns the
