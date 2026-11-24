@@ -1,0 +1,6 @@
+.PHONY: build test
+build:
+	go build -trimpath -ldflags "-s -w" -o vamola-dpi .
+test:
+	go vet ./...
+	go test ./...

@@ -1,0 +1,16 @@
+[Unit]
+Description=vamola-dpi local proxy (TLS ClientHello fragmentation)
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/vamola-dpi proxy
+Restart=on-failure
+RestartSec=2
+# runs as your user, no root, loopback only
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
