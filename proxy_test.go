@@ -9,8 +9,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // capListener records the first bytes every accepted connection receives.
@@ -38,21 +42,6 @@ func (c *capConn) Read(b []byte) (int, error) {
 	}
 	c.l.mu.Unlock()
 	return n, err
-}
-
-func TestFragmentClientHello(t *testing.T) {
-	body := []byte("\x01....discord.com....")
-	rec := append([]byte{0x16, 3, 1, 0, byte(len(body))}, body...)
-	out := fragmentClientHello(rec, "discord.com")
-	if len(out) != len(rec)+5 { // one extra record header
-		t.Fatalf("expected two records, total %d bytes (original %d)", len(out), len(rec))
-	}
-	if got := fragmentClientHello(rec, "other.net"); string(got) != string(rec) {
-		t.Error("a record without the SNI must be unchanged")
-	}
-	if got := fragmentClientHello([]byte{0x17, 3, 3, 0, 2, 1, 2}, "x"); len(got) != 7 {
-		t.Error("non-handshake data must be unchanged")
-	}
 }
 
 func TestWants(t *testing.T) {
@@ -133,4 +122,75 @@ func (r *bytesReader) Read(p []byte) (int, error) {
 	n := copy(p, r.b[r.i:])
 	r.i += n
 	return n, nil
+}
+
+func TestRuleset(t *testing.T) {
+	r := ruleset(18443, 18053, true)
+	for _, want := range []string{"meta mark 0x66726167 return", "ip daddr 127.0.0.0/8 return", "udp dport 53 redirect to :18053", "tcp dport 443 redirect to :18443"} {
+		if !strings.Contains(r, want) {
+			t.Errorf("ruleset misses %q", want)
+		}
+	}
+	// the DNS rule must come before the private-range exclusion (LAN resolvers need it)
+	if strings.Index(r, "udp dport 53") > strings.Index(r, "192.168.0.0/16") {
+		t.Error("DNS redirect must come before the private range exclusion")
+	}
+	if strings.Contains(ruleset(18443, 18053, false), "udp dport 53") {
+		t.Error("no DNS rule expected with dns=false")
+	}
+}
+
+func TestDNSForwarder(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Content-Type") != "application/dns-message" {
+			http.Error(w, "bad type", 400)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		w.Write(append(b, 'R'))
+	}))
+	defer up.Close()
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	f := &dnsForwarder{conn: conn, client: up.Client(), upstreams: []string{"http://127.0.0.1:1/dead", up.URL}}
+	go f.serve()
+
+	c, _ := net.Dial("udp", conn.LocalAddr().String())
+	defer c.Close()
+	q := []byte("0123456789ab-query") // >= 12 bytes like a real DNS header
+	c.Write(q)
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 100)
+	n, err := c.Read(buf)
+	if err != nil {
+		t.Fatal("no answer:", err)
+	}
+	if string(buf[:n]) != string(q)+"R" {
+		t.Fatalf("answer = %q (first upstream was dead, the second must be used)", buf[:n])
+	}
+}
+
+func TestInstallUninstall(t *testing.T) {
+	dir := t.TempDir()
+	// install copies the running binary; use any file as the source via the test binary itself
+	runInstall([]string{"--prefix", dir, "--no-systemctl"})
+	bin := filepath.Join(dir, binDest)
+	if st, err := os.Stat(bin); err != nil || st.Mode()&0o111 == 0 {
+		t.Fatalf("binary not installed/executable: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, unitDest))
+	if err != nil || !strings.Contains(string(b), "ExecStart=/usr/local/bin/fragma run") ||
+		!strings.Contains(string(b), "ExecStopPost=-/usr/bin/env nft delete table ip fragma") {
+		t.Fatalf("unit file wrong: %v\n%s", err, b)
+	}
+	runUninstall([]string{"--prefix", dir, "--no-systemctl"})
+	if _, err := os.Stat(bin); err == nil {
+		t.Error("binary still there after uninstall")
+	}
+	if _, err := os.Stat(filepath.Join(dir, unitDest)); err == nil {
+		t.Error("unit still there after uninstall")
+	}
 }

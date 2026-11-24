@@ -20,6 +20,7 @@ type proxy struct {
 	only    []string // host suffixes to fragment; empty = every HTTPS connection
 	tlsPort string   // only this port is treated as TLS (client speaks first)
 	resolve func(ctx context.Context, host string) []net.IP
+	dial    func(ctx context.Context, network, addr string) (net.Conn, error) // nil = plain dialer
 
 	mu    sync.Mutex
 	cache map[string]cached
@@ -54,6 +55,13 @@ func (p *proxy) lookup(ctx context.Context, host string) []net.IP {
 	return ips
 }
 
+func (p *proxy) dialContext(ctx context.Context, addr string) (net.Conn, error) {
+	if p.dial != nil {
+		return p.dial(ctx, "tcp", addr)
+	}
+	return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", addr)
+}
+
 func (p *proxy) wants(host string) bool {
 	if len(p.only) == 0 {
 		return true
@@ -68,12 +76,12 @@ func (p *proxy) wants(host string) bool {
 
 // fragmentClientHello cuts a full TLS record (header + body) into two records
 // in the middle of the SNI. Anything it cannot cut is returned unchanged.
-func fragmentClientHello(rec []byte, host string) []byte {
-	mid := posMidSNI(rec, host)
-	if mid < 0 {
+func fragmentClientHello(rec []byte) []byte {
+	host, off, ok := findSNI(rec)
+	if !ok {
 		return rec
 	}
-	r1, r2 := fragmentRecord(rec, mid-5)
+	r1, r2 := fragmentRecord(rec, off+len(host)/2-5)
 	if r1 == nil {
 		return rec
 	}
@@ -105,7 +113,7 @@ func (p *proxy) handle(client net.Conn) {
 		if i == 3 {
 			break
 		}
-		if up, err = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port)); err == nil {
+		if up, err = p.dialContext(ctx, net.JoinHostPort(ip.String(), port)); err == nil {
 			break
 		}
 	}
@@ -119,7 +127,7 @@ func (p *proxy) handle(client net.Conn) {
 	// The first record from the client is the ClientHello: rewrite it.
 	if port == p.tlsPort && p.wants(host) {
 		if first, err := readRecord(br); err == nil {
-			if _, err := up.Write(fragmentClientHello(first, host)); err != nil {
+			if _, err := up.Write(fragmentClientHello(first)); err != nil {
 				return
 			}
 		} else {

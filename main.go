@@ -19,9 +19,12 @@ import (
 
 var targets = []string{
 	"discord.com", "gateway.discord.gg", "cdn.discordapp.com",
-	"youtube.com", "x.com", "instagram.com",
+	"www.roblox.com", "apis.roblox.com", "auth.roblox.com", "setup.rbxcdn.com",
+	"youtube.com",
 	"wikipedia.org", "example.com", // controls: normally not blocked
 }
+
+const version = "0.1.0"
 
 const stepTimeout = 5 * time.Second
 
@@ -223,8 +226,26 @@ func bypassRunning() []string {
 	return found
 }
 
+const usage = `fragma %s: get around SNI-based access blocks (Discord, Roblox, ...)
+
+  sudo fragma install     install and start (also starts at every boot)
+  sudo fragma stop        turn it off
+  sudo fragma start       turn it on again
+  fragma status           is it on?
+  sudo fragma uninstall   remove everything
+
+  fragma probe            how is each site blocked on this connection?
+  fragma experiment       which technique does your ISP's DPI not understand?
+  fragma proxy            local HTTPS proxy, no root (per app)
+  sudo fragma run         system-wide mode in the foreground (the service uses this)
+`
+
 func main() {
 	ctx := context.Background()
+	if len(os.Args) == 1 {
+		fmt.Printf(usage, version)
+		return
+	}
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "experiment":
@@ -232,6 +253,29 @@ func main() {
 			return
 		case "proxy":
 			runProxy(ctx, os.Args[2:])
+			return
+		case "run":
+			runDaemon(os.Args[2:])
+			return
+		case "install":
+			runInstall(os.Args[2:])
+			return
+		case "uninstall":
+			runUninstall(os.Args[2:])
+			return
+		case "start", "stop", "restart":
+			runControl(os.Args[1])
+			return
+		case "status":
+			runStatus()
+			return
+		case "version", "--version":
+			fmt.Println("fragma", version)
+			return
+		case "probe":
+			// falls through to the probe below
+		default:
+			fmt.Printf(usage, version)
 			return
 		}
 	}
