@@ -194,3 +194,22 @@ func TestInstallUninstall(t *testing.T) {
 		t.Error("unit still there after uninstall")
 	}
 }
+
+func TestBox(t *testing.T) {
+	old := colorOn
+	defer func() { colorOn = old }()
+	for _, on := range []bool{false, true} {
+		colorOn = on
+		out := box("fragma is ON", []string{"", "short", paint(cBold, "bold part") + "   rest of the line", ""}, cGreen)
+		lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+		w := visibleLen(lines[0])
+		for _, l := range lines {
+			if visibleLen(l) != w {
+				t.Fatalf("color=%v: line %q is %d wide, want %d", on, l, visibleLen(l), w)
+			}
+		}
+		if !on && strings.Contains(out, "\x1b[") {
+			t.Fatal("no escape codes allowed when color is off")
+		}
+	}
+}

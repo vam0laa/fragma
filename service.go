@@ -36,7 +36,7 @@ WantedBy=multi-user.target
 )
 
 func fail(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "fragma: "+format+"\n", a...)
+	fmt.Fprintf(os.Stderr, "  %s %s\n", paint(cRed, "✖"), fmt.Sprintf(format, a...))
 	os.Exit(1)
 }
 
@@ -108,25 +108,43 @@ func runInstall(args []string) {
 	if err := os.WriteFile(unit, []byte(unitText), 0o644); err != nil {
 		fail("writing the service file: %v", err)
 	}
-	fmt.Println("installed:", bin)
+	stepOK("Installed", binDest)
 	if *noSys {
 		return
 	}
 	if err := systemctl("daemon-reload"); err != nil {
 		fail("systemctl daemon-reload failed (is this a systemd system?)")
 	}
-	if err := systemctl("enable", "--now", "fragma"); err != nil {
+	quiet := func(args ...string) error {
+		c := exec.Command("systemctl", args...)
+		c.Stderr = os.Stderr
+		return c.Run()
+	}
+	if err := quiet("enable", "fragma"); err != nil {
+		fail("could not enable the service, see: journalctl -u fragma")
+	}
+	stepOK("Service", "enabled, starts at every boot")
+	if err := quiet("restart", "fragma"); err != nil { // restart: an upgrade must run the new binary
 		fail("could not start the service, see: journalctl -u fragma")
 	}
 	time.Sleep(time.Second)
 	if !active() {
 		fail("the service did not stay up, see: journalctl -u fragma -n 30")
 	}
+	stepOK("fragma", "running")
 	fmt.Println()
-	fmt.Println("fragma is ON and starts automatically at boot.")
-	fmt.Println("  stop it:      sudo fragma stop")
-	fmt.Println("  start again:  sudo fragma start")
-	fmt.Println("  remove it:    sudo fragma uninstall")
+	fmt.Print(box("fragma is ON", []string{
+		"",
+		"Discord, Roblox and other blocked sites",
+		"should open now.",
+		"",
+		paint(cBold, "sudo fragma stop") + "        turn it off",
+		paint(cBold, "sudo fragma start") + "       turn it on again",
+		paint(cBold, "fragma status") + "           is it on?",
+		paint(cBold, "sudo fragma uninstall") + "   remove everything",
+		"",
+	}, cGreen))
+	fmt.Println()
 }
 
 func runUninstall(args []string) {
@@ -146,7 +164,7 @@ func runUninstall(args []string) {
 		systemctl("daemon-reload")
 		removeRules() // in case the service was already gone
 	}
-	fmt.Println("fragma removed.")
+	stepOK("Removed", "service, rules and program are gone")
 }
 
 // runControl wraps systemctl start|stop|restart.
@@ -157,11 +175,11 @@ func runControl(action string) {
 	}
 	switch action {
 	case "stop":
-		fmt.Println("fragma is OFF. Nothing is redirected anymore.")
+		fmt.Printf("  %s fragma is %s. Nothing is redirected anymore.\n", paint(cAmber, "○"), paint(cBold+";"+cAmber, "OFF"))
 	default:
 		time.Sleep(time.Second)
 		if active() {
-			fmt.Println("fragma is ON.")
+			fmt.Printf("  %s fragma is %s.\n", paint(cGreen, "●"), paint(cBold+";"+cGreen, "ON"))
 		} else {
 			fail("the service did not stay up, see: journalctl -u fragma -n 30")
 		}
@@ -170,9 +188,9 @@ func runControl(action string) {
 
 func runStatus() {
 	if active() {
-		fmt.Println("fragma is ON  (stop with: sudo fragma stop)")
+		fmt.Printf("  %s fragma is %s  %s\n", paint(cGreen, "●"), paint(cBold+";"+cGreen, "ON"), paint(cDim, "(stop with: sudo fragma stop)"))
 		return
 	}
-	fmt.Println("fragma is OFF (start with: sudo fragma start)")
+	fmt.Printf("  %s fragma is %s  %s\n", paint(cAmber, "○"), paint(cBold+";"+cAmber, "OFF"), paint(cDim, "(start with: sudo fragma start)"))
 	os.Exit(3) // like systemctl is-active
 }
