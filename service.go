@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -46,11 +45,6 @@ StateDirectory=fragma
 WantedBy=multi-user.target
 `
 )
-
-func fail(msg string) {
-	fmt.Fprintf(os.Stderr, "  %s %s\n", paint(cRed, "✖"), msg)
-	os.Exit(1)
-}
 
 func needRoot(cmd string) {
 	if os.Geteuid() != 0 {
@@ -216,7 +210,7 @@ func runStatus() {
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
-// runAdd appends host names to the user's list.
+// runAdd appends host names to the system-wide list.
 func runAdd(args []string) {
 	fs := flag.NewFlagSet("add", flag.ExitOnError)
 	prefix := fs.String("prefix", "", "root directory (testing)")
@@ -227,53 +221,12 @@ func runAdd(args []string) {
 	if *prefix == "" {
 		needRoot("add")
 	}
-	path := filepath.Join(*prefix, defaultHostsFile)
-	have := map[string]bool{}
-	if f, err := os.Open(path); err == nil {
-		for _, h := range parseHosts(f) {
-			have[h] = true
-		}
-		f.Close()
-	}
-	os.MkdirAll(filepath.Dir(path), 0o755)
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		fail(err.Error())
-	}
-	defer f.Close()
-	for _, a := range fs.Args() {
-		h := normalizeHost(a)
-		switch {
-		case h == "" || strings.ContainsAny(h, " /:"):
-			fail(T("fail.badhost", a))
-		case have[h]:
-			stepOK(T("step.known"), h)
-		default:
-			fmt.Fprintln(f, h)
-			stepOK(T("step.added"), h+" ("+T("d.applies")+")")
-		}
-	}
+	appendHosts(filepath.Join(*prefix, defaultHostsFile), fs.Args())
 }
 
 // runList shows which hosts fragma changes.
 func runList() {
-	h := newHostlist(defaultHostsFile, filepath.Join(defaultStateDir, "learned.txt"))
-	b, u, l := h.lists()
-	show := func(title string, xs []string, hint string) {
-		fmt.Printf("  %s  %s\n", paint(cBold, title), paint(cDim, hint))
-		if len(xs) == 0 {
-			fmt.Println("    " + paint(cDim, T("list.none")))
-		}
-		for _, x := range xs {
-			fmt.Println("    " + x)
-		}
-		fmt.Println()
-	}
-	fmt.Println()
-	show(T("list.builtin"), b, T("list.always"))
-	show(T("list.yours"), u, defaultHostsFile)
-	show(T("list.learned"), l, T("list.found"))
-	fmt.Println("  " + paint(cDim, T("list.footer")))
+	printLists(newHostlist(defaultHostsFile, filepath.Join(defaultStateDir, "learned.txt")), defaultHostsFile)
 }
 
 // runDNS switches the optional DNS-over-HTTPS part on or off with a systemd drop-in.

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -25,7 +26,8 @@ const maxLearned = 2000
 type hostlist struct {
 	mu          sync.RWMutex
 	builtin     map[string]bool
-	user        map[string]bool
+	extra       map[string]bool // given on the command line (fragma proxy --add)
+	user        map[string]bool // from the user's file
 	learned     map[string]bool
 	userFile    string
 	learnedFile string
@@ -33,13 +35,13 @@ type hostlist struct {
 }
 
 func newHostlist(userFile, learnedFile string, extra ...string) *hostlist {
-	h := &hostlist{builtin: map[string]bool{}, user: map[string]bool{}, learned: map[string]bool{}, userFile: userFile, learnedFile: learnedFile}
+	h := &hostlist{builtin: map[string]bool{}, extra: map[string]bool{}, user: map[string]bool{}, learned: map[string]bool{}, userFile: userFile, learnedFile: learnedFile}
 	for _, s := range builtinHosts {
 		h.builtin[s] = true
 	}
 	for _, s := range extra {
 		if s = normalizeHost(s); s != "" {
-			h.user[s] = true
+			h.extra[s] = true
 		}
 	}
 	h.reload()
@@ -79,7 +81,7 @@ func (h *hostlist) matches(host string) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	for host != "" {
-		if h.builtin[host] || h.user[host] || h.learned[host] {
+		if h.builtin[host] || h.extra[host] || h.user[host] || h.learned[host] {
 			return true
 		}
 		i := strings.IndexByte(host, '.')
@@ -108,6 +110,7 @@ func (h *hostlist) learn(host string) {
 	if file == "" {
 		return
 	}
+	os.MkdirAll(filepath.Dir(file), 0o755)
 	if f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 		f.WriteString(host + "\n")
 		f.Close()
@@ -138,13 +141,7 @@ func (h *hostlist) reload() {
 	}
 	if m, t, ok := readHostFile(h.userFile); ok && !t.Equal(h.mod[0]) {
 		h.mu.Lock()
-		extra := h.user
 		h.user, h.mod[0] = m, t
-		for k := range extra { // keep hosts that were given on the command line
-			if _, inFile := m[k]; !inFile && h.userFile == "" {
-				h.user[k] = true
-			}
-		}
 		h.mu.Unlock()
 	}
 	if m, t, ok := readHostFile(h.learnedFile); ok && !t.Equal(h.mod[1]) {
@@ -175,7 +172,14 @@ func (h *hostlist) watch(stop <-chan struct{}) {
 func (h *hostlist) lists() (builtin, user, learned []string) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	return keys(h.builtin), keys(h.user), keys(h.learned)
+	mine := map[string]bool{}
+	for k := range h.user {
+		mine[k] = true
+	}
+	for k := range h.extra {
+		mine[k] = true
+	}
+	return keys(h.builtin), keys(mine), keys(h.learned)
 }
 
 func keys(m map[string]bool) []string {

@@ -2,7 +2,7 @@
 
 **Open the sites your ISP blocks (Discord, Roblox, ...) with one command, and leave everything
 else exactly as it is.** No VPN, no account, no telemetry. A [zapret](https://github.com/bol-van/zapret) /
-GoodbyeDPI alternative for Linux, written in Go.
+GoodbyeDPI alternative, written in Go. **Linux** (system-wide) and **Windows** (experimental, local proxy).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vam0laa/fragma/main/install.sh | sudo sh
@@ -103,6 +103,26 @@ sha256sum --ignore-missing -c SHA256SUMS
 tar xzf fragma-linux-amd64.tar.gz && sudo ./fragma install
 ```
 
+## Windows (experimental)
+
+The full automatic mode is Linux only. On Windows the local proxy works: it changes only blocked
+sites, learns new ones and remembers them, like on Linux. The code is tested on a real Windows
+machine by CI on every change, but it has **not been tried against blocked sites on Windows yet**.
+Please tell us how it goes (open an issue).
+
+1. Download `fragma-windows-amd64.zip` from the [latest release](https://github.com/vam0laa/fragma/releases/latest),
+   compare it with `SHA256SUMS` (`certutil -hashfile fragma-windows-amd64.zip SHA256`) and unzip it.
+   The program is not code-signed, so Windows SmartScreen or your antivirus may warn; you can also
+   build it yourself with `go build`.
+2. Open a terminal in that folder, run `fragma.exe proxy` and leave it open.
+3. Tell Windows to use it: Settings → Network & internet → Proxy → Manual proxy setup → **On**,
+   address `127.0.0.1`, port `8899`. Browsers and apps that follow the Windows proxy now go through
+   fragma. Discord can also be started with `--proxy-server=http://127.0.0.1:8899`.
+4. To undo: switch the manual proxy off and close fragma.
+
+Your own sites and the learned ones live in `%AppData%\fragma` (`fragma add example.com`,
+`fragma list`). Where you need a mature, fully automatic Windows tool, use GoodbyeDPI.
+
 ## Limitations (please read)
 
 - **HTTPS (TCP) only.** UDP traffic is not touched. That includes Discord voice/video calls and
@@ -126,7 +146,7 @@ tar xzf fragma-linux-amd64.tar.gz && sudo ./fragma install
 | `sudo fragma dns on [--doh URL]` / `off` | Optional DNS-over-HTTPS, off by default. |
 | `fragma probe` | For each site: is DNS poisoned? IP blocked? SNI blocked? Every test is repeated 3 times because DPI is often intermittent. |
 | `fragma experiment [hosts...]` | Tries 6 ways of sending the TLS ClientHello, 10 times each, and prints success counts. |
-| `fragma proxy [--listen 127.0.0.1:8899] [--add site]` | A local HTTPS proxy for a single app, no root needed (for example `discord --proxy-server=http://127.0.0.1:8899`). [`docs/proxy.pac`](docs/proxy.pac) sends only blocked sites through it. |
+| `fragma proxy [--listen 127.0.0.1:8899] [--add site]` | A local HTTPS proxy for a single app, no root needed (the way to use fragma on Windows) (for example `discord --proxy-server=http://127.0.0.1:8899`). [`docs/proxy.pac`](docs/proxy.pac) sends only blocked sites through it. |
 | `sudo fragma run [--dns] [--doh URL] [--hosts FILE] [--state DIR]` | System-wide mode in the foreground (the service runs this). |
 
 ## Development
@@ -144,6 +164,7 @@ and removes its rules on stop.
 
 ## Roadmap
 
+- [ ] Windows system-wide mode (needs a packet driver such as WinDivert)
 - [ ] UDP / QUIC support (voice, games)
 - [ ] IPv6
 - [ ] Detect silent-drop blocks

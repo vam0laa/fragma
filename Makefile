@@ -22,4 +22,6 @@ release: test
 		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "-s -w" -o dist/fragma . && \
 		tar -C dist --owner=0 --group=0 --numeric-owner -czf dist/fragma-linux-$$arch.tar.gz fragma && rm dist/fragma; \
 	done
-	cd dist && sha256sum *.tar.gz > SHA256SUMS
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/fragma.exe .
+	bsdtar --format zip -cf dist/fragma-windows-amd64.zip -C dist fragma.exe && rm dist/fragma.exe
+	cd dist && sha256sum *.tar.gz *.zip > SHA256SUMS

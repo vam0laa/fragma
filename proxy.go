@@ -187,6 +187,8 @@ func runProxy(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("proxy", flag.ExitOnError)
 	listen := fs.String("listen", "127.0.0.1:8899", "loopback address to listen on")
 	add := fs.String("add", "", "comma separated extra host names to treat as blocked")
+	hostsFile := fs.String("hosts", userFile("hosts.txt"), "your own list of blocked hosts, one per line")
+	learnedFile := fs.String("learned", userFile("learned.txt"), "where hosts learned to be blocked are kept")
 	fs.Parse(args)
 
 	host, _, err := net.SplitHostPort(*listen)
@@ -199,7 +201,8 @@ func runProxy(ctx context.Context, args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	p := &proxy{resolve: dohDNS, cache: map[string]cached{}, tlsPort: "443", hosts: newHostlist("", "", strings.Split(*add, ",")...)}
+	p := &proxy{resolve: dohDNS, cache: map[string]cached{}, tlsPort: "443", hosts: newHostlist(*hostsFile, *learnedFile, strings.Split(*add, ",")...)}
+	go p.hosts.watch(make(chan struct{}))
 	fmt.Printf("fragma proxy on %s (HTTPS CONNECT; only blocked hosts are touched)\n", *listen)
 	p.serve(ln)
 }

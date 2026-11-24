@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -24,7 +25,7 @@ var targets = []string{
 	"wikipedia.org", "example.com", // controls: normally not blocked
 }
 
-const version = "0.2.1"
+const version = "0.3.0"
 
 const stepTimeout = 5 * time.Second
 
@@ -229,7 +230,7 @@ func bypassRunning() []string {
 func main() {
 	ctx := context.Background()
 	if len(os.Args) == 1 {
-		fmt.Printf(T("usage"), version)
+		fmt.Printf(T(usageKey()), version)
 		return
 	}
 	if len(os.Args) > 1 {
@@ -270,7 +271,7 @@ func main() {
 		case "probe":
 			// falls through to the probe below
 		default:
-			fmt.Printf(T("usage"), version)
+			fmt.Printf(T(usageKey()), version)
 			return
 		}
 	}
@@ -292,4 +293,13 @@ func main() {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", r.host, r.dns, r.tcp, r.real, r.none, r.verdict)
 	}
 	w.Flush()
+}
+
+// usageKey picks the help text that fits the system: the Linux one lists the
+// service commands, the other one only what exists there.
+func usageKey() string {
+	if runtime.GOOS == "linux" {
+		return "usage"
+	}
+	return "usage.win"
 }

@@ -79,7 +79,8 @@ func TestParseHosts(t *testing.T) {
 
 func TestLearnPersistsAndReloads(t *testing.T) {
 	dir := t.TempDir()
-	user, learned := filepath.Join(dir, "hosts.txt"), filepath.Join(dir, "learned.txt")
+	// the learned file lives in a folder that does not exist yet (first run on a new system)
+	user, learned := filepath.Join(dir, "hosts.txt"), filepath.Join(dir, "state", "fragma", "learned.txt")
 	os.WriteFile(user, []byte("one.test\n"), 0o644)
 	h := newHostlist(user, learned)
 	if !h.matches("one.test") || h.matches("two.test") {
@@ -461,4 +462,49 @@ func (l *capListener) handshakeRecordsForTest() int {
 		b = b[ln:]
 	}
 	return n
+}
+
+// Hosts given on the command line (fragma proxy --add) must survive a reload of
+// the user's file; they used to be dropped as soon as that file existed.
+func TestExtraHostsSurviveReload(t *testing.T) {
+	user := filepath.Join(t.TempDir(), "hosts.txt")
+	os.WriteFile(user, []byte("from-file.test\n"), 0o644)
+	h := newHostlist(user, "", "from-flag.test")
+	if !h.matches("from-file.test") || !h.matches("from-flag.test") {
+		t.Fatal("both the file host and the command line host must match")
+	}
+	os.WriteFile(user, []byte("changed.test\n"), 0o644)
+	os.Chtimes(user, time.Now().Add(time.Hour), time.Now().Add(time.Hour))
+	h.reload()
+	if !h.matches("changed.test") || !h.matches("from-flag.test") || h.matches("from-file.test") {
+		t.Fatal("reload must pick up the file and keep the command line hosts")
+	}
+	_, mine, _ := h.lists()
+	if strings.Join(mine, ",") != "changed.test,from-flag.test" {
+		t.Fatalf("list of your hosts = %v", mine)
+	}
+}
+
+// fragma add / fragma list on the per-user files (this is what Windows uses).
+func TestAddAndListUserFiles(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir) // Linux
+	t.Setenv("APPDATA", dir)         // Windows
+	runAddUser([]string{"One.Test", "two.test"})
+	runAddUser([]string{"one.test"}) // already there
+	b, err := os.ReadFile(userFile("hosts.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parseHosts(strings.NewReader(string(b))); strings.Join(got, ",") != "one.test,two.test" {
+		t.Fatalf("hosts file = %v", got)
+	}
+	h := newHostlist(userFile("hosts.txt"), userFile("learned.txt"))
+	if !h.matches("two.test") {
+		t.Fatal("added host not matched")
+	}
+	h.learn("learned.test")
+	if _, err := os.Stat(userFile("learned.txt")); err != nil {
+		t.Fatal("learn must create the user folder and file:", err)
+	}
 }

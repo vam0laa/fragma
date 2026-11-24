@@ -40,6 +40,7 @@ func T(key string, args ...any) string {
 var catalog = map[string]map[string]string{
 	"en": {
 		"os.unsupported": "this command is only available on Linux. On this system use: fragma proxy",
+		"fail.nohome":    "cannot find your user config folder",
 		"fail.root":      "this needs root: sudo fragma %s",
 		"fail.copy":      "installing the binary: %v",
 		"fail.unit":      "writing the service file: %v",
@@ -92,6 +93,18 @@ var catalog = map[string]map[string]string{
 		"dns.on":         "DNS-over-HTTPS is %s",
 		"dns.off":        "DNS is %s (your system DNS is used as is)",
 		"dns.untouched":  "untouched",
+		"usage.win": `fragma %s (experimental on this system): get around SNI-based access blocks (Discord, Roblox, ...)
+
+  fragma proxy            start the local HTTPS proxy, then set 127.0.0.1:8899 as your proxy
+  fragma add <site>       also treat this site as blocked
+  fragma list             which sites does fragma change? (all others: none)
+
+  fragma probe            how is each site blocked on this connection?
+  fragma experiment       which technique does your ISP's DPI not understand?
+
+System-wide mode (install/stop/start) exists on Linux only.
+Language: FRAGMA_LANG=tr or en (default: from your locale)
+`,
 		"usage": `fragma %s: get around SNI-based access blocks (Discord, Roblox, ...)
 
   sudo fragma install     install and start (also starts at every boot)
@@ -114,6 +127,7 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 	},
 	"tr": {
 		"os.unsupported": "bu komut yalnızca Linux'ta var. Bu sistemde şunu kullan: fragma proxy",
+		"fail.nohome":    "kullanıcı ayar klasörün bulunamadı",
 		"fail.root":      "bunun için yönetici yetkisi gerekir: sudo fragma %s",
 		"fail.copy":      "program kurulamadı: %v",
 		"fail.unit":      "servis dosyası yazılamadı: %v",
@@ -166,6 +180,18 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 		"dns.on":         "DNS-over-HTTPS %s",
 		"dns.off":        "DNS %s (sistem DNS'in olduğu gibi kullanılıyor)",
 		"dns.untouched":  "dokunulmuyor",
+		"usage.win": `fragma %s (bu sistemde deneysel): SNI tabanlı erişim engellerini aşar (Discord, Roblox, ...)
+
+  fragma proxy            yerel HTTPS proxy'sini başlat, sonra proxy olarak 127.0.0.1:8899 gir
+  fragma add <site>       bu siteyi de engelli say
+  fragma list             fragma hangi siteleri değiştiriyor? (diğer hepsi: hiçbiri)
+
+  fragma probe            bu bağlantıda her site nasıl engelleniyor?
+  fragma experiment       operatörünün DPI'ı hangi tekniği anlamıyor?
+
+Sistem geneli mod (install/stop/start) yalnızca Linux'ta var.
+Dil: FRAGMA_LANG=tr veya en (varsayılan: sistem dilinden)
+`,
 		"usage": `fragma %s: SNI tabanlı erişim engellerini aşar (Discord, Roblox, ...)
 
   sudo fragma install     kur ve başlat (her açılışta da başlar)

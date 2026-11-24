@@ -17,8 +17,8 @@ func unsupported([]string) {
 func runDaemon(args []string)    { unsupported(args) }
 func runInstall(args []string)   { unsupported(args) }
 func runUninstall(args []string) { unsupported(args) }
-func runAdd(args []string)       { unsupported(args) }
-func runList()                   { unsupported(nil) }
+func runAdd(args []string)       { runAddUser(args) }
+func runList()                   { runListUser() }
 func runDNS(args []string)       { unsupported(args) }
 func runStatus()                 { unsupported(nil) }
 func runControl(string)          { unsupported(nil) }

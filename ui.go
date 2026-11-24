@@ -73,3 +73,8 @@ func box(title string, lines []string, color string) string {
 	b.WriteString(paint(color, "╰"+strings.Repeat("─", inner)+"╯") + "\n")
 	return b.String()
 }
+
+func fail(msg string) {
+	fmt.Fprintf(os.Stderr, "  %s %s\n", paint(cRed, "✖"), msg)
+	os.Exit(1)
+}
