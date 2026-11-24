@@ -104,9 +104,9 @@ tar xzf fragma-linux-amd64.tar.gz && sudo ./fragma install
 
 ## Limitations (please read)
 
-- **HTTPS (TCP) only.** UDP traffic is not touched: Discord voice/video calls, and probably
-  in-game traffic of Roblox, which use UDP. Roblox's website, login and API (all HTTPS) are covered.
-  We have not measured whether your ISP blocks the UDP part.
+- **HTTPS (TCP) only.** UDP traffic is not touched. That includes Discord voice/video calls and
+  probably Roblox in-game traffic. On the ISP we tested, Discord voice works without any help
+  because that ISP blocks only the HTTPS side; an ISP that also blocks UDP is not covered yet.
 - Automatic detection recognises blocks that **cut the connection** (reset). A block that silently
   drops packets is not detected; add such a site by hand with `sudo fragma add`.
 - IPv4 only for now. It cannot help against blocks by IP address, only against SNI blocking (and
