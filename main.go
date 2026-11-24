@@ -24,7 +24,7 @@ var targets = []string{
 	"wikipedia.org", "example.com", // controls: normally not blocked
 }
 
-const version = "0.2.0"
+const version = "0.2.1"
 
 const stepTimeout = 5 * time.Second
 
@@ -226,28 +226,10 @@ func bypassRunning() []string {
 	return found
 }
 
-const usage = `fragma %s: get around SNI-based access blocks (Discord, Roblox, ...)
-
-  sudo fragma install     install and start (also starts at every boot)
-  sudo fragma stop        turn it off
-  sudo fragma start       turn it on again
-  fragma status           is it on?
-  sudo fragma uninstall   remove everything
-
-  sudo fragma add <site>  also treat this site as blocked
-  fragma list             which sites does fragma change? (all others: none)
-  sudo fragma dns on|off  optional: answer DNS over DNS-over-HTTPS (off by default)
-
-  fragma probe            how is each site blocked on this connection?
-  fragma experiment       which technique does your ISP's DPI not understand?
-  fragma proxy            local HTTPS proxy, no root (per app)
-  sudo fragma run         system-wide mode in the foreground (the service uses this)
-`
-
 func main() {
 	ctx := context.Background()
 	if len(os.Args) == 1 {
-		fmt.Printf(usage, version)
+		fmt.Printf(T("usage"), version)
 		return
 	}
 	if len(os.Args) > 1 {
@@ -288,7 +270,7 @@ func main() {
 		case "probe":
 			// falls through to the probe below
 		default:
-			fmt.Printf(usage, version)
+			fmt.Printf(T("usage"), version)
 			return
 		}
 	}

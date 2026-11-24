@@ -9,7 +9,8 @@ curl -fsSL https://raw.githubusercontent.com/vam0laa/fragma/main/install.sh | su
 ```
 
 That downloads the latest release, verifies its checksum, installs it and starts it. It also
-starts at every boot. To turn it off:
+starts at every boot. The installer and all commands speak **English or Türkçe**, chosen from your
+system language (force one with `FRAGMA_LANG=tr` or `FRAGMA_LANG=en`). To turn it off:
 
 ```bash
 sudo fragma stop        # off, nothing is redirected anymore
@@ -146,7 +147,7 @@ and removes its rules on stop.
 - [ ] UDP / QUIC support (voice, games)
 - [ ] IPv6
 - [ ] Detect silent-drop blocks
-- [ ] English / Türkçe output, boxed UI like [vamola-doctor](https://github.com/vam0laa/vamola-doctor)
+- [x] English / Türkçe messages
 - [ ] AUR package
 
 ## License

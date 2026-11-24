@@ -45,14 +45,14 @@ WantedBy=multi-user.target
 `
 )
 
-func fail(format string, a ...any) {
-	fmt.Fprintf(os.Stderr, "  %s %s\n", paint(cRed, "✖"), fmt.Sprintf(format, a...))
+func fail(msg string) {
+	fmt.Fprintf(os.Stderr, "  %s %s\n", paint(cRed, "✖"), msg)
 	os.Exit(1)
 }
 
 func needRoot(cmd string) {
 	if os.Geteuid() != 0 {
-		fail("this needs root: sudo fragma %s", cmd)
+		fail(T("fail.root", cmd))
 	}
 }
 
@@ -100,25 +100,25 @@ func runInstall(args []string) {
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		fail("%v", err)
+		fail(err.Error())
 	}
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
-		fail("%v", err)
+		fail(err.Error())
 	}
 	bin := filepath.Join(*prefix, binDest)
 	if exe != bin {
 		if err := copyFile(exe, bin, 0o755); err != nil {
-			fail("installing the binary: %v", err)
+			fail(T("fail.copy", err))
 		}
 	}
 	unit := filepath.Join(*prefix, unitDest)
 	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
-		fail("%v", err)
+		fail(err.Error())
 	}
 	if err := os.WriteFile(unit, []byte(unitText), 0o644); err != nil {
-		fail("writing the service file: %v", err)
+		fail(T("fail.unit", err))
 	}
-	stepOK("Installed", binDest)
+	stepOK(T("step.installed"), binDest)
 	if hf := filepath.Join(*prefix, defaultHostsFile); !exists(hf) {
 		os.MkdirAll(filepath.Dir(hf), 0o755)
 		os.WriteFile(hf, []byte(hostsTpl), 0o644)
@@ -127,7 +127,7 @@ func runInstall(args []string) {
 		return
 	}
 	if err := systemctl("daemon-reload"); err != nil {
-		fail("systemctl daemon-reload failed (is this a systemd system?)")
+		fail(T("fail.reload"))
 	}
 	quiet := func(args ...string) error {
 		c := exec.Command("systemctl", args...)
@@ -135,29 +135,30 @@ func runInstall(args []string) {
 		return c.Run()
 	}
 	if err := quiet("enable", "fragma"); err != nil {
-		fail("could not enable the service, see: journalctl -u fragma")
+		fail(T("fail.enable"))
 	}
-	stepOK("Service", "enabled, starts at every boot")
+	stepOK(T("step.service"), T("d.enabled"))
 	if err := quiet("restart", "fragma"); err != nil { // restart: an upgrade must run the new binary
-		fail("could not start the service, see: journalctl -u fragma")
+		fail(T("fail.start"))
 	}
 	time.Sleep(time.Second)
 	if !active() {
-		fail("the service did not stay up, see: journalctl -u fragma -n 30")
+		fail(T("fail.stayup"))
 	}
-	stepOK("fragma", "running")
+	stepOK(T("step.running"), T("d.running"))
 	fmt.Println()
-	fmt.Print(box("fragma is ON", []string{
+	cmd := func(c, desc string) string { return padRight(paint(cBold, c), 24) + desc }
+	fmt.Print(box(T("box.title"), []string{
 		"",
-		"Discord, Roblox and other blocked sites",
-		"should open now. Every other site is",
-		"left exactly as it is.",
+		T("box.l1"),
+		T("box.l2"),
+		T("box.l3"),
 		"",
-		paint(cBold, "sudo fragma stop") + "        turn it off",
-		paint(cBold, "sudo fragma start") + "       turn it on again",
-		paint(cBold, "fragma status") + "           is it on?",
-		paint(cBold, "sudo fragma add <site>") + "  add a blocked site",
-		paint(cBold, "sudo fragma uninstall") + "   remove everything",
+		cmd("sudo fragma stop", T("box.stop")),
+		cmd("sudo fragma start", T("box.start")),
+		cmd("fragma status", T("box.status")),
+		cmd("sudo fragma add <site>", T("box.add")),
+		cmd("sudo fragma uninstall", T("box.uninstall")),
 		"",
 	}, cGreen))
 	fmt.Println()
@@ -180,34 +181,34 @@ func runUninstall(args []string) {
 		systemctl("daemon-reload")
 		removeRules() // in case the service was already gone
 	}
-	stepOK("Removed", "service, rules and program are gone")
+	stepOK(T("step.removed"), T("d.removed"))
 }
 
 // runControl wraps systemctl start|stop|restart.
 func runControl(action string) {
 	needRoot(action)
 	if err := systemctl(action, "fragma"); err != nil {
-		fail("systemctl %s fragma failed (installed? run the install command first)", action)
+		fail(T("fail.ctl", action))
 	}
 	switch action {
 	case "stop":
-		fmt.Printf("  %s fragma is %s. Nothing is redirected anymore.\n", paint(cAmber, "○"), paint(cBold+";"+cAmber, "OFF"))
+		fmt.Printf("  %s %s\n", paint(cAmber, "○"), T("ctl.off", paint(cBold+";"+cAmber, T("word.off"))))
 	default:
 		time.Sleep(time.Second)
 		if active() {
-			fmt.Printf("  %s fragma is %s.\n", paint(cGreen, "●"), paint(cBold+";"+cGreen, "ON"))
+			fmt.Printf("  %s %s\n", paint(cGreen, "●"), T("ctl.on", paint(cBold+";"+cGreen, T("word.on"))))
 		} else {
-			fail("the service did not stay up, see: journalctl -u fragma -n 30")
+			fail(T("fail.stayup"))
 		}
 	}
 }
 
 func runStatus() {
 	if active() {
-		fmt.Printf("  %s fragma is %s  %s\n", paint(cGreen, "●"), paint(cBold+";"+cGreen, "ON"), paint(cDim, "(stop with: sudo fragma stop)"))
+		fmt.Printf("  %s %s\n", paint(cGreen, "●"), T("st.on", paint(cBold+";"+cGreen, T("word.on")), paint(cDim, T("st.onhint"))))
 		return
 	}
-	fmt.Printf("  %s fragma is %s  %s\n", paint(cAmber, "○"), paint(cBold+";"+cAmber, "OFF"), paint(cDim, "(start with: sudo fragma start)"))
+	fmt.Printf("  %s %s\n", paint(cAmber, "○"), T("st.off", paint(cBold+";"+cAmber, T("word.off")), paint(cDim, T("st.offhint"))))
 	os.Exit(3) // like systemctl is-active
 }
 
@@ -219,7 +220,7 @@ func runAdd(args []string) {
 	prefix := fs.String("prefix", "", "root directory (testing)")
 	fs.Parse(args)
 	if fs.NArg() == 0 {
-		fail("usage: sudo fragma add example.com [more.org ...]")
+		fail(T("fail.addusage"))
 	}
 	if *prefix == "" {
 		needRoot("add")
@@ -235,19 +236,19 @@ func runAdd(args []string) {
 	os.MkdirAll(filepath.Dir(path), 0o755)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		fail("%v", err)
+		fail(err.Error())
 	}
 	defer f.Close()
 	for _, a := range fs.Args() {
 		h := normalizeHost(a)
 		switch {
 		case h == "" || strings.ContainsAny(h, " /:"):
-			fail("not a host name: %q", a)
+			fail(T("fail.badhost", a))
 		case have[h]:
-			stepOK("Known", h)
+			stepOK(T("step.known"), h)
 		default:
 			fmt.Fprintln(f, h)
-			stepOK("Added", h+" (applies within 10 seconds)")
+			stepOK(T("step.added"), h+" ("+T("d.applies")+")")
 		}
 	}
 }
@@ -259,7 +260,7 @@ func runList() {
 	show := func(title string, xs []string, hint string) {
 		fmt.Printf("  %s  %s\n", paint(cBold, title), paint(cDim, hint))
 		if len(xs) == 0 {
-			fmt.Println("    " + paint(cDim, "(none)"))
+			fmt.Println("    " + paint(cDim, T("list.none")))
 		}
 		for _, x := range xs {
 			fmt.Println("    " + x)
@@ -267,10 +268,10 @@ func runList() {
 		fmt.Println()
 	}
 	fmt.Println()
-	show("Built in", b, "always")
-	show("Yours", u, defaultHostsFile)
-	show("Learned", l, "found blocked by fragma itself")
-	fmt.Println("  " + paint(cDim, "Every other site is passed through unchanged."))
+	show(T("list.builtin"), b, T("list.always"))
+	show(T("list.yours"), u, defaultHostsFile)
+	show(T("list.learned"), l, T("list.found"))
+	fmt.Println("  " + paint(cDim, T("list.footer")))
 }
 
 // runDNS switches the optional DNS-over-HTTPS part on or off with a systemd drop-in.
@@ -296,9 +297,9 @@ func runDNS(args []string) {
 	switch action {
 	case "status":
 		if exists(path) {
-			fmt.Printf("  %s DNS-over-HTTPS is %s\n", paint(cGreen, "●"), paint(cBold+";"+cGreen, "ON"))
+			fmt.Printf("  %s %s\n", paint(cGreen, "●"), T("dns.on", paint(cBold+";"+cGreen, T("word.on"))))
 		} else {
-			fmt.Printf("  %s DNS is %s (your system DNS is used as is)\n", paint(cDim, "○"), paint(cBold, "untouched"))
+			fmt.Printf("  %s %s\n", paint(cDim, "○"), T("dns.off", paint(cBold, T("dns.untouched"))))
 		}
 		return
 	case "on":
@@ -311,7 +312,7 @@ func runDNS(args []string) {
 		}
 		os.MkdirAll(filepath.Dir(path), 0o755)
 		if err := os.WriteFile(path, []byte("[Service]\nExecStart=\nExecStart="+exec+"\n"), 0o644); err != nil {
-			fail("%v", err)
+			fail(err.Error())
 		}
 	case "off":
 		if *prefix == "" {
@@ -320,17 +321,17 @@ func runDNS(args []string) {
 		os.Remove(path)
 		os.Remove(filepath.Dir(path))
 	default:
-		fail("usage: sudo fragma dns on [--doh URL] | off | status")
+		fail(T("fail.dnsusage"))
 	}
 	if !*noSys {
 		systemctl("daemon-reload")
 		if err := systemctl("restart", "fragma"); err != nil {
-			fail("could not restart the service, see: journalctl -u fragma")
+			fail(T("fail.restart"))
 		}
 	}
 	if action == "on" {
-		stepOK("DNS", "answered over DNS-over-HTTPS; your lookups go to that provider, not to your ISP")
+		stepOK(T("step.dns"), T("d.dnson"))
 	} else {
-		stepOK("DNS", "untouched again")
+		stepOK(T("step.dns"), T("d.dnsoff"))
 	}
 }
