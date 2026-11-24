@@ -83,7 +83,7 @@ tar xzf fragma-linux-amd64.tar.gz && sudo ./fragma install
   in-game traffic of Roblox, which use UDP. Roblox's website, login and API (all HTTPS) are covered.
   We have not measured whether your ISP blocks the UDP part.
 - IPv4 only for now. It cannot help against blocks by IP address, only against SNI/DNS blocking.
-- If a site stops working after installing, `sudo fragma stop` and check again; please open an issue.
+- Some servers refuse a fragmented ClientHello and hang up. fragma notices, retries that connection once without fragmenting and remembers the server for 30 minutes, so those sites keep working (the first visit can take a moment longer). If a site still breaks, `sudo fragma stop`, check again and please open an issue.
 - Another tool that rewrites the same traffic (for example zapret) is redundant next to fragma.
 - It only changes how *your own* connection is written to the network. You are responsible for
   using it in line with the laws and terms of service that apply to you.

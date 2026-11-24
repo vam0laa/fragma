@@ -45,11 +45,16 @@ func (p *proxy) handleTransparent(client net.Conn) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	up, err := p.dialContext(ctx, net.JoinHostPort(ip.String(), strconv.Itoa(port)))
+	addr := net.JoinHostPort(ip.String(), strconv.Itoa(port))
+	up, err := p.dialContext(ctx, addr)
 	if err != nil {
 		return
 	}
-	defer up.Close()
+	defer func() {
+		if up != nil {
+			up.Close()
+		}
+	}()
 
 	br := bufio.NewReader(client)
 	if port == 443 { // TLS: the client speaks first, so the first record is the ClientHello
@@ -58,8 +63,15 @@ func (p *proxy) handleTransparent(client net.Conn) {
 		if err != nil {
 			return
 		}
-		if _, err := up.Write(fragmentClientHello(first)); err != nil {
+		var resp []byte
+		up, resp, err = p.sendHello(up, first, addr, func() (net.Conn, error) { return p.dialContext(ctx, addr) })
+		if err != nil {
 			return
+		}
+		if len(resp) > 0 {
+			if _, err := client.Write(resp); err != nil {
+				return
+			}
 		}
 		client.SetReadDeadline(time.Time{})
 	}

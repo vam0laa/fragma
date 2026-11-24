@@ -24,7 +24,7 @@ var targets = []string{
 	"wikipedia.org", "example.com", // controls: normally not blocked
 }
 
-const version = "0.1.1"
+const version = "0.1.2"
 
 const stepTimeout = 5 * time.Second
 

@@ -22,6 +22,8 @@ type proxy struct {
 	resolve func(ctx context.Context, host string) []net.IP
 	dial    func(ctx context.Context, network, addr string) (net.Conn, error) // nil = plain dialer
 
+	noFrag noFragCache // servers that refuse a fragmented ClientHello
+
 	mu    sync.Mutex
 	cache map[string]cached
 }
@@ -121,17 +123,29 @@ func (p *proxy) handle(client net.Conn) {
 		io.WriteString(client, "HTTP/1.1 502 Bad Gateway\r\n\r\n")
 		return
 	}
-	defer up.Close()
+	defer func() {
+		if up != nil {
+			up.Close()
+		}
+	}()
 	io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n")
 
 	// The first record from the client is the ClientHello: rewrite it.
 	if port == p.tlsPort && p.wants(host) {
-		if first, err := readRecord(br); err == nil {
-			if _, err := up.Write(fragmentClientHello(first)); err != nil {
+		first, err := readRecord(br)
+		if err != nil {
+			return
+		}
+		addr := up.RemoteAddr().String()
+		var resp []byte
+		up, resp, err = p.sendHello(up, first, addr, func() (net.Conn, error) { return p.dialContext(ctx, addr) })
+		if err != nil {
+			return
+		}
+		if len(resp) > 0 {
+			if _, err := client.Write(resp); err != nil {
 				return
 			}
-		} else {
-			return
 		}
 	}
 	client.SetReadDeadline(time.Time{})

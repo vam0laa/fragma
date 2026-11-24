@@ -99,6 +99,18 @@ func TestSandbox(t *testing.T) {
 	blocked := tlsServer(t, "203.0.113.5:443")
 	lan := tlsServer(t, "10.1.2.3:443")
 
+	// a server that hangs up on a fragmented ClientHello
+	pln, err := net.Listen("tcp", "203.0.113.7:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	picky := &pickyListener{Listener: pln}
+	psrv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "ok") }))
+	psrv.Listener.Close()
+	psrv.Listener = picky
+	psrv.StartTLS()
+	defer psrv.Close()
+
 	isp, err := net.ListenPacket("udp", "203.0.113.53:53")
 	if err != nil {
 		t.Fatal(err)
@@ -164,6 +176,15 @@ func TestSandbox(t *testing.T) {
 	dialTLS(t, "10.1.2.3:443")
 	if n := lan.handshakeRecords(); n != 1 {
 		t.Fatalf("private address must not be touched, got %d records", n)
+	}
+	// 4b. a server that refuses fragmented hellos still works (fallback), and is remembered
+	dialTLS(t, "203.0.113.7:443")
+	if n := picky.rejected.Load(); n != 1 {
+		t.Fatalf("picky server: expected exactly 1 refused fragmented attempt, got %d", n)
+	}
+	dialTLS(t, "203.0.113.7:443")
+	if n := picky.rejected.Load(); n != 1 {
+		t.Fatalf("picky server must be remembered, refusals went to %d", n)
 	}
 	// 5. DNS goes to DNS-over-HTTPS, not to the lying ISP
 	if got := askDNS(t, "203.0.113.53:53"); got != "0123456789ab-queryR" {

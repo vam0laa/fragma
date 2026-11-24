@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -211,5 +213,111 @@ func TestBox(t *testing.T) {
 		if !on && strings.Contains(out, "\x1b[") {
 			t.Fatal("no escape codes allowed when color is off")
 		}
+	}
+}
+
+// pickyListener plays a server (or firewall) that hangs up on a fragmented
+// ClientHello and counts how often it did.
+type pickyListener struct {
+	net.Listener
+	rejected atomic.Int32
+}
+
+type replayConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c *replayConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+func (l *pickyListener) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		hdr := make([]byte, 9)
+		c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := io.ReadFull(c, hdr); err != nil {
+			c.Close()
+			continue
+		}
+		c.SetReadDeadline(time.Time{})
+		recLen := int(hdr[3])<<8 | int(hdr[4])
+		hsLen := int(hdr[6])<<16 | int(hdr[7])<<8 | int(hdr[8])
+		if hdr[0] == 0x16 && hsLen+4 != recLen { // the ClientHello is split over records
+			l.rejected.Add(1)
+			c.Close()
+			continue
+		}
+		return &replayConn{Conn: c, r: io.MultiReader(bytes.NewReader(hdr), c)}, nil
+	}
+}
+
+func TestFallbackForPickyServer(t *testing.T) {
+	ln0, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl := &pickyListener{Listener: ln0}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "hello") }))
+	srv.Listener.Close()
+	srv.Listener = pl
+	srv.StartTLS()
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(ln0.Addr().String())
+
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer ln.Close()
+	p := &proxy{
+		tlsPort: port,
+		cache:   map[string]cached{},
+		resolve: func(context.Context, string) []net.IP { return []net.IP{net.ParseIP("127.0.0.1")} },
+	}
+	go p.serve(ln)
+	pu, _ := url.Parse("http://" + ln.Addr().String())
+	get := func() string {
+		hc := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+			Proxy:             http.ProxyURL(pu),
+			DisableKeepAlives: true,
+			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		}}
+		resp, err := hc.Get("https://picky.test:" + port + "/")
+		if err != nil {
+			t.Fatal("request failed:", err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b)
+	}
+
+	if got := get(); got != "hello" {
+		t.Fatalf("first request: %q", got)
+	}
+	if n := pl.rejected.Load(); n != 1 {
+		t.Fatalf("the fragmented attempt should have been refused once, got %d", n)
+	}
+	if got := get(); got != "hello" {
+		t.Fatalf("second request: %q", got)
+	}
+	if n := pl.rejected.Load(); n != 1 {
+		t.Fatalf("the server must be remembered: expected still 1 refusal, got %d", n)
+	}
+}
+
+func TestNoFragCacheExpires(t *testing.T) {
+	var c noFragCache
+	if c.has("a") {
+		t.Fatal("empty cache")
+	}
+	c.add("a")
+	if !c.has("a") || c.has("b") {
+		t.Fatal("add/has")
+	}
+	c.mu.Lock()
+	c.m["a"] = time.Now().Add(-time.Second)
+	c.mu.Unlock()
+	if c.has("a") {
+		t.Fatal("entry must expire")
 	}
 }
