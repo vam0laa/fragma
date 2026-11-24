@@ -46,13 +46,58 @@ func (c *capConn) Read(b []byte) (int, error) {
 	return n, err
 }
 
-func TestWants(t *testing.T) {
-	p := &proxy{only: []string{"discord.com"}}
-	if !p.wants("discord.com") || !p.wants("cdn.discord.com") || p.wants("notdiscord.com") || p.wants("example.org") {
-		t.Error("suffix matching wrong")
+func TestHostlist(t *testing.T) {
+	h := newHostlist("", "", "Example.ORG", "*.blocked.test")
+	for host, want := range map[string]bool{
+		"discord.com":          true, // built in
+		"cdn.discord.com":      true, // parent domain matches
+		"gateway.discord.gg":   true,
+		"notdiscord.com":       false, // must not match on a bare suffix
+		"discord.com.evil.net": false,
+		"example.org":          true, // user host, normalized
+		"a.b.example.org":      true,
+		"x.blocked.test":       true,
+		"turktelekom.com.tr":   false, // everything else is left alone
+		"":                     false,
+	} {
+		if got := h.matches(host); got != want {
+			t.Errorf("matches(%q) = %v, want %v", host, got, want)
+		}
 	}
-	if !(&proxy{}).wants("anything.io") {
-		t.Error("empty list must match everything")
+	var nilList *hostlist
+	if nilList.matches("discord.com") {
+		t.Error("a nil list must match nothing")
+	}
+}
+
+func TestParseHosts(t *testing.T) {
+	got := parseHosts(strings.NewReader("# comment\n\nFoo.com  # trailing\n*.bar.org\n  baz.net\n"))
+	if strings.Join(got, ",") != "foo.com,bar.org,baz.net" {
+		t.Fatalf("parseHosts = %v", got)
+	}
+}
+
+func TestLearnPersistsAndReloads(t *testing.T) {
+	dir := t.TempDir()
+	user, learned := filepath.Join(dir, "hosts.txt"), filepath.Join(dir, "learned.txt")
+	os.WriteFile(user, []byte("one.test\n"), 0o644)
+	h := newHostlist(user, learned)
+	if !h.matches("one.test") || h.matches("two.test") {
+		t.Fatal("user file not read")
+	}
+	h.learn("Two.Test")
+	if !h.matches("two.test") {
+		t.Fatal("learned host not matched")
+	}
+	h2 := newHostlist(user, learned) // a restart
+	if !h2.matches("two.test") {
+		t.Fatal("learned host must survive a restart")
+	}
+	os.WriteFile(user, []byte("one.test\nthree.test\n"), 0o644)
+	os.Chtimes(user, time.Now().Add(time.Hour), time.Now().Add(time.Hour))
+	h.reload()
+	if !h.matches("three.test") {
+		t.Fatal("changed user file must be picked up")
 	}
 }
 
@@ -71,6 +116,7 @@ func TestProxyFragmentsAndStillWorks(t *testing.T) {
 	defer ln.Close()
 	p := &proxy{
 		tlsPort: port,
+		hosts:   newHostlist("", "", "blocked.test"),
 		cache:   map[string]cached{},
 		resolve: func(context.Context, string) []net.IP { return []net.IP{net.ParseIP("127.0.0.1")} },
 	}
@@ -185,7 +231,8 @@ func TestInstallUninstall(t *testing.T) {
 	}
 	b, err := os.ReadFile(filepath.Join(dir, unitDest))
 	if err != nil || !strings.Contains(string(b), "ExecStart=/usr/local/bin/fragma run") ||
-		!strings.Contains(string(b), "ExecStopPost=-/usr/bin/env nft delete table ip fragma") {
+		!strings.Contains(string(b), "ExecStopPost=-/usr/bin/env nft delete table ip fragma") ||
+		!strings.Contains(string(b), "StateDirectory=fragma") {
 		t.Fatalf("unit file wrong: %v\n%s", err, b)
 	}
 	runUninstall([]string{"--prefix", dir, "--no-systemctl"})
@@ -271,6 +318,7 @@ func TestFallbackForPickyServer(t *testing.T) {
 	defer ln.Close()
 	p := &proxy{
 		tlsPort: port,
+		hosts:   newHostlist("", "", "picky.test"),
 		cache:   map[string]cached{},
 		resolve: func(context.Context, string) []net.IP { return []net.IP{net.ParseIP("127.0.0.1")} },
 	}
@@ -319,5 +367,174 @@ func TestNoFragCacheExpires(t *testing.T) {
 	c.mu.Unlock()
 	if c.has("a") {
 		t.Fatal("entry must expire")
+	}
+}
+
+// dpiListener plays a blocking DPI box: it resets every connection whose
+// plain (unfragmented) ClientHello names the blocked host.
+type dpiListener struct {
+	net.Listener
+	blocked string
+	resets  atomic.Int32
+}
+
+func (l *dpiListener) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		rec, err := readRecord(c)
+		if err != nil {
+			c.Close()
+			continue
+		}
+		c.SetReadDeadline(time.Time{})
+		if host, _, ok := findSNI(rec); ok && host == l.blocked {
+			l.resets.Add(1)
+			c.(*net.TCPConn).SetLinger(0) // close sends a RST
+			c.Close()
+			continue
+		}
+		return &replayConn{Conn: c, r: io.MultiReader(bytes.NewReader(rec), c)}, nil
+	}
+}
+
+// startTLS runs an HTTPS test server on a wrapped listener and a proxy in front.
+func startProxyAndServer(t *testing.T, wrap func(net.Listener) net.Listener, hosts *hostlist) (port string, p *proxy, get func(host string) (string, error)) {
+	t.Helper()
+	ln0, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "hello") }))
+	srv.Listener.Close()
+	srv.Listener = wrap(ln0)
+	srv.StartTLS()
+	t.Cleanup(srv.Close)
+	_, port, _ = net.SplitHostPort(ln0.Addr().String())
+
+	pln, _ := net.Listen("tcp", "127.0.0.1:0")
+	t.Cleanup(func() { pln.Close() })
+	p = &proxy{
+		tlsPort: port,
+		hosts:   hosts,
+		cache:   map[string]cached{},
+		resolve: func(context.Context, string) []net.IP { return []net.IP{net.ParseIP("127.0.0.1")} },
+	}
+	go p.serve(pln)
+	pu, _ := url.Parse("http://" + pln.Addr().String())
+	get = func(host string) (string, error) {
+		hc := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{
+			Proxy: http.ProxyURL(pu), DisableKeepAlives: true,
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}}
+		resp, err := hc.Get("https://" + host + ":" + port + "/")
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return string(b), nil
+	}
+	return
+}
+
+// The core promise: a host that is not on any list is passed through unchanged.
+func TestUnlistedHostIsUntouched(t *testing.T) {
+	var cl *capListener
+	_, _, get := startProxyAndServer(t, func(l net.Listener) net.Listener { cl = &capListener{Listener: l}; return cl }, newHostlist("", ""))
+	if got, err := get("turktelekom.test"); err != nil || got != "hello" {
+		t.Fatalf("request: %q %v", got, err)
+	}
+	if n := cl.handshakeRecordsForTest(); n != 1 {
+		t.Fatalf("an unlisted host must get its ClientHello unchanged (1 record), got %d records", n)
+	}
+}
+
+// A host that is cut when plain but works fragmented is learned, once.
+func TestBlockedHostIsLearned(t *testing.T) {
+	var dpi *dpiListener
+	hosts := newHostlist("", filepath.Join(t.TempDir(), "learned.txt"))
+	_, _, get := startProxyAndServer(t, func(l net.Listener) net.Listener { dpi = &dpiListener{Listener: l, blocked: "reset.test"}; return dpi }, hosts)
+
+	if hosts.matches("reset.test") {
+		t.Fatal("must not be known beforehand")
+	}
+	if got, err := get("reset.test"); err != nil || got != "hello" {
+		t.Fatalf("first request must succeed through the automatic retry: %q %v", got, err)
+	}
+	if n := dpi.resets.Load(); n != 1 {
+		t.Fatalf("expected exactly 1 reset of the plain attempt, got %d", n)
+	}
+	if !hosts.matches("reset.test") {
+		t.Fatal("the blocked host must now be learned")
+	}
+	if got, err := get("reset.test"); err != nil || got != "hello" {
+		t.Fatalf("second request: %q %v", got, err)
+	}
+	if n := dpi.resets.Load(); n != 1 {
+		t.Fatalf("a learned host must be fragmented right away: resets went to %d", n)
+	}
+	// an unrelated host on the same server stays untouched
+	if got, err := get("fine.test"); err != nil || got != "hello" {
+		t.Fatalf("other host: %q %v", got, err)
+	}
+	if n := dpi.resets.Load(); n != 1 {
+		t.Fatalf("other host must not trigger the DPI: %d", n)
+	}
+}
+
+func (l *capListener) handshakeRecordsForTest() int {
+	l.mu.Lock()
+	b := append([]byte(nil), l.got...)
+	l.mu.Unlock()
+	n := 0
+	for len(b) >= 5 && b[0] == 0x16 {
+		n++
+		ln := 5 + (int(b[3])<<8 | int(b[4]))
+		if ln > len(b) {
+			break
+		}
+		b = b[ln:]
+	}
+	return n
+}
+
+func TestInstallCreatesHostsFile(t *testing.T) {
+	dir := t.TempDir()
+	runInstall([]string{"--prefix", dir, "--no-systemctl"})
+	b, err := os.ReadFile(filepath.Join(dir, defaultHostsFile))
+	if err != nil || !strings.Contains(string(b), "Every other site is left completely alone") {
+		t.Fatalf("hosts file missing or wrong: %v", err)
+	}
+	if got := parseHosts(strings.NewReader(string(b))); len(got) != 0 {
+		t.Fatalf("the template must not contain active hosts, got %v", got)
+	}
+}
+
+func TestAddHosts(t *testing.T) {
+	dir := t.TempDir()
+	runAdd([]string{"--prefix", dir, "Example.COM", "foo.org"})
+	runAdd([]string{"--prefix", dir, "example.com"}) // duplicate: not added twice
+	b, _ := os.ReadFile(filepath.Join(dir, defaultHostsFile))
+	got := parseHosts(strings.NewReader(string(b)))
+	if strings.Join(got, ",") != "example.com,foo.org" {
+		t.Fatalf("hosts file = %v", got)
+	}
+}
+
+func TestDNSDropIn(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, dropIn)
+	runDNS([]string{"--prefix", dir, "--no-systemctl", "on", "--doh", "https://dns.example/dns-query"})
+	b, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(b), "ExecStart=\nExecStart=/usr/local/bin/fragma run --dns --doh https://dns.example/dns-query") {
+		t.Fatalf("drop-in wrong: %v\n%s", err, b)
+	}
+	runDNS([]string{"--prefix", dir, "--no-systemctl", "off"})
+	if exists(path) {
+		t.Fatal("drop-in must be removed by `dns off`")
 	}
 }

@@ -24,7 +24,7 @@ var targets = []string{
 	"wikipedia.org", "example.com", // controls: normally not blocked
 }
 
-const version = "0.1.2"
+const version = "0.2.0"
 
 const stepTimeout = 5 * time.Second
 
@@ -234,6 +234,10 @@ const usage = `fragma %s: get around SNI-based access blocks (Discord, Roblox, .
   fragma status           is it on?
   sudo fragma uninstall   remove everything
 
+  sudo fragma add <site>  also treat this site as blocked
+  fragma list             which sites does fragma change? (all others: none)
+  sudo fragma dns on|off  optional: answer DNS over DNS-over-HTTPS (off by default)
+
   fragma probe            how is each site blocked on this connection?
   fragma experiment       which technique does your ISP's DPI not understand?
   fragma proxy            local HTTPS proxy, no root (per app)
@@ -268,6 +272,15 @@ func main() {
 			return
 		case "status":
 			runStatus()
+			return
+		case "add":
+			runAdd(os.Args[2:])
+			return
+		case "list":
+			runList()
+			return
+		case "dns":
+			runDNS(os.Args[2:])
 			return
 		case "version", "--version":
 			fmt.Println("fragma", version)

@@ -7,12 +7,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 const (
 	binDest  = "/usr/local/bin/fragma"
 	unitDest = "/etc/systemd/system/fragma.service"
+	dropIn   = "/etc/systemd/system/fragma.service.d/dns.conf"
+	hostsTpl = `# Extra sites that are blocked for you, one per line (subdomains are included).
+# fragma already knows Discord and Roblox and learns blocked sites by itself.
+# Every other site is left completely alone.
+# Changes apply within 10 seconds, no restart needed.
+#
+# example.com
+`
 	unitText = `[Unit]
 Description=fragma: get around SNI-based access blocks (TLS ClientHello fragmentation)
 After=network-online.target nss-lookup.target
@@ -29,6 +38,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
+StateDirectory=fragma
 
 [Install]
 WantedBy=multi-user.target
@@ -109,6 +119,10 @@ func runInstall(args []string) {
 		fail("writing the service file: %v", err)
 	}
 	stepOK("Installed", binDest)
+	if hf := filepath.Join(*prefix, defaultHostsFile); !exists(hf) {
+		os.MkdirAll(filepath.Dir(hf), 0o755)
+		os.WriteFile(hf, []byte(hostsTpl), 0o644)
+	}
 	if *noSys {
 		return
 	}
@@ -136,11 +150,13 @@ func runInstall(args []string) {
 	fmt.Print(box("fragma is ON", []string{
 		"",
 		"Discord, Roblox and other blocked sites",
-		"should open now.",
+		"should open now. Every other site is",
+		"left exactly as it is.",
 		"",
 		paint(cBold, "sudo fragma stop") + "        turn it off",
 		paint(cBold, "sudo fragma start") + "       turn it on again",
 		paint(cBold, "fragma status") + "           is it on?",
+		paint(cBold, "sudo fragma add <site>") + "  add a blocked site",
 		paint(cBold, "sudo fragma uninstall") + "   remove everything",
 		"",
 	}, cGreen))
@@ -193,4 +209,128 @@ func runStatus() {
 	}
 	fmt.Printf("  %s fragma is %s  %s\n", paint(cAmber, "○"), paint(cBold+";"+cAmber, "OFF"), paint(cDim, "(start with: sudo fragma start)"))
 	os.Exit(3) // like systemctl is-active
+}
+
+func exists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// runAdd appends host names to the user's list.
+func runAdd(args []string) {
+	fs := flag.NewFlagSet("add", flag.ExitOnError)
+	prefix := fs.String("prefix", "", "root directory (testing)")
+	fs.Parse(args)
+	if fs.NArg() == 0 {
+		fail("usage: sudo fragma add example.com [more.org ...]")
+	}
+	if *prefix == "" {
+		needRoot("add")
+	}
+	path := filepath.Join(*prefix, defaultHostsFile)
+	have := map[string]bool{}
+	if f, err := os.Open(path); err == nil {
+		for _, h := range parseHosts(f) {
+			have[h] = true
+		}
+		f.Close()
+	}
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		fail("%v", err)
+	}
+	defer f.Close()
+	for _, a := range fs.Args() {
+		h := normalizeHost(a)
+		switch {
+		case h == "" || strings.ContainsAny(h, " /:"):
+			fail("not a host name: %q", a)
+		case have[h]:
+			stepOK("Known", h)
+		default:
+			fmt.Fprintln(f, h)
+			stepOK("Added", h+" (applies within 10 seconds)")
+		}
+	}
+}
+
+// runList shows which hosts fragma changes.
+func runList() {
+	h := newHostlist(defaultHostsFile, filepath.Join(defaultStateDir, "learned.txt"))
+	b, u, l := h.lists()
+	show := func(title string, xs []string, hint string) {
+		fmt.Printf("  %s  %s\n", paint(cBold, title), paint(cDim, hint))
+		if len(xs) == 0 {
+			fmt.Println("    " + paint(cDim, "(none)"))
+		}
+		for _, x := range xs {
+			fmt.Println("    " + x)
+		}
+		fmt.Println()
+	}
+	fmt.Println()
+	show("Built in", b, "always")
+	show("Yours", u, defaultHostsFile)
+	show("Learned", l, "found blocked by fragma itself")
+	fmt.Println("  " + paint(cDim, "Every other site is passed through unchanged."))
+}
+
+// runDNS switches the optional DNS-over-HTTPS part on or off with a systemd drop-in.
+func runDNS(args []string) {
+	fs := flag.NewFlagSet("dns", flag.ExitOnError)
+	prefix := fs.String("prefix", "", "root directory (testing)")
+	noSys := fs.Bool("no-systemctl", false, "only write the files")
+	doh := fs.String("doh", "", "your own DNS-over-HTTPS URL(s), comma separated (default: Cloudflare)")
+	// flags and the action word in any order: `dns on --doh URL` or `dns --doh URL on`
+	action := ""
+	for {
+		fs.Parse(args)
+		rest := fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		if action == "" {
+			action = rest[0]
+		}
+		args = rest[1:]
+	}
+	path := filepath.Join(*prefix, dropIn)
+	switch action {
+	case "status":
+		if exists(path) {
+			fmt.Printf("  %s DNS-over-HTTPS is %s\n", paint(cGreen, "●"), paint(cBold+";"+cGreen, "ON"))
+		} else {
+			fmt.Printf("  %s DNS is %s (your system DNS is used as is)\n", paint(cDim, "○"), paint(cBold, "untouched"))
+		}
+		return
+	case "on":
+		if *prefix == "" {
+			needRoot("dns on")
+		}
+		exec := "/usr/local/bin/fragma run --dns"
+		if *doh != "" {
+			exec += " --doh " + *doh
+		}
+		os.MkdirAll(filepath.Dir(path), 0o755)
+		if err := os.WriteFile(path, []byte("[Service]\nExecStart=\nExecStart="+exec+"\n"), 0o644); err != nil {
+			fail("%v", err)
+		}
+	case "off":
+		if *prefix == "" {
+			needRoot("dns off")
+		}
+		os.Remove(path)
+		os.Remove(filepath.Dir(path))
+	default:
+		fail("usage: sudo fragma dns on [--doh URL] | off | status")
+	}
+	if !*noSys {
+		systemctl("daemon-reload")
+		if err := systemctl("restart", "fragma"); err != nil {
+			fail("could not restart the service, see: journalctl -u fragma")
+		}
+	}
+	if action == "on" {
+		stepOK("DNS", "answered over DNS-over-HTTPS; your lookups go to that provider, not to your ISP")
+	} else {
+		stepOK("DNS", "untouched again")
+	}
 }

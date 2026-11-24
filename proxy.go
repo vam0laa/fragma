@@ -17,8 +17,8 @@ import (
 // proxy is a local HTTP CONNECT proxy that fragments the TLS ClientHello so
 // SNI-based DPI cannot read the host name. It needs no root.
 type proxy struct {
-	only    []string // host suffixes to fragment; empty = every HTTPS connection
-	tlsPort string   // only this port is treated as TLS (client speaks first)
+	hosts   *hostlist // which hosts get fragmented (nil: none)
+	tlsPort string    // only this port is treated as TLS (client speaks first)
 	resolve func(ctx context.Context, host string) []net.IP
 	dial    func(ctx context.Context, network, addr string) (net.Conn, error) // nil = plain dialer
 
@@ -62,18 +62,6 @@ func (p *proxy) dialContext(ctx context.Context, addr string) (net.Conn, error) 
 		return p.dial(ctx, "tcp", addr)
 	}
 	return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", addr)
-}
-
-func (p *proxy) wants(host string) bool {
-	if len(p.only) == 0 {
-		return true
-	}
-	for _, s := range p.only {
-		if host == s || strings.HasSuffix(host, "."+s) {
-			return true
-		}
-	}
-	return false
 }
 
 // fragmentClientHello cuts a full TLS record (header + body) into two records
@@ -131,7 +119,7 @@ func (p *proxy) handle(client net.Conn) {
 	io.WriteString(client, "HTTP/1.1 200 Connection Established\r\n\r\n")
 
 	// The first record from the client is the ClientHello: rewrite it.
-	if port == p.tlsPort && p.wants(host) {
+	if port == p.tlsPort {
 		first, err := readRecord(br)
 		if err != nil {
 			return
@@ -198,7 +186,7 @@ func (p *proxy) serve(ln net.Listener) {
 func runProxy(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("proxy", flag.ExitOnError)
 	listen := fs.String("listen", "127.0.0.1:8899", "loopback address to listen on")
-	only := fs.String("only", "", "comma separated host suffixes to fragment (default: all HTTPS)")
+	add := fs.String("add", "", "comma separated extra host names to treat as blocked")
 	fs.Parse(args)
 
 	host, _, err := net.SplitHostPort(*listen)
@@ -211,12 +199,7 @@ func runProxy(ctx context.Context, args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	p := &proxy{resolve: dohDNS, cache: map[string]cached{}, tlsPort: "443"}
-	for _, s := range strings.Split(*only, ",") {
-		if s = strings.TrimSpace(s); s != "" {
-			p.only = append(p.only, s)
-		}
-	}
-	fmt.Printf("vamola-dpi proxy on %s (HTTPS CONNECT, DoH DNS)\n", *listen)
+	p := &proxy{resolve: dohDNS, cache: map[string]cached{}, tlsPort: "443", hosts: newHostlist("", "", strings.Split(*add, ",")...)}
+	fmt.Printf("fragma proxy on %s (HTTPS CONNECT; only blocked hosts are touched)\n", *listen)
 	p.serve(ln)
 }

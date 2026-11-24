@@ -44,53 +44,67 @@ func isHangup(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
 }
 
-// sendHello writes the client's first TLS record to up, fragmented unless the
-// server is known to dislike that. It returns the connection to use from now
-// on (a new one after a fallback) and the first bytes the server answered
-// with, which the caller must pass on to the client.
+// sendHello writes the client's first TLS record to up and returns the
+// connection to use from now on plus the first bytes the server answered with
+// (the caller passes them on to the client).
+//
+// Only hosts that need it get a fragmented ClientHello:
+//   - a host on a list is fragmented; if the server hangs up on that, retry plain
+//     and remember the server (some refuse fragmented hellos)
+//   - any other host is sent unchanged; if the server hangs up (the typical
+//     sign of a block), retry fragmented and, if that works, learn the host
 func (p *proxy) sendHello(up net.Conn, first []byte, key string, redial func() (net.Conn, error)) (net.Conn, []byte, error) {
-	hello := first
-	if !p.noFrag.has(key) {
-		hello = fragmentClientHello(first)
+	host, _, hasSNI := findSNI(first)
+	frag := fragmentClientHello(first)
+	listed := hasSNI && p.hosts.matches(host)
+
+	type attempt struct {
+		hello   []byte
+		fragged bool
 	}
-	if _, err := up.Write(hello); err != nil {
-		return up, nil, err
-	}
-	if len(hello) == len(first) { // not fragmented: nothing to fall back from
-		return up, nil, nil
+	var plan []attempt
+	switch {
+	case !hasSNI || len(frag) == len(first), p.noFrag.has(key):
+		plan = []attempt{{first, false}}
+	case listed:
+		plan = []attempt{{frag, true}, {first, false}}
+	default:
+		plan = []attempt{{first, false}, {frag, true}}
 	}
 
 	buf := make([]byte, 16*1024)
-	up.SetReadDeadline(time.Now().Add(4 * time.Second))
-	n, err := up.Read(buf)
-	up.SetReadDeadline(time.Time{})
-	if n > 0 {
-		return up, buf[:n], nil
+	conn := up
+	for i, a := range plan {
+		if i > 0 {
+			c, err := redial()
+			if err != nil {
+				return nil, nil, err
+			}
+			conn = c
+		}
+		if _, err := conn.Write(a.hello); err != nil {
+			conn.Close()
+			return nil, nil, err
+		}
+		if len(plan) == 1 { // nothing to compare against: just pipe
+			return conn, nil, nil
+		}
+		conn.SetReadDeadline(time.Now().Add(4 * time.Second))
+		n, err := conn.Read(buf)
+		conn.SetReadDeadline(time.Time{})
+		if n > 0 {
+			switch {
+			case a.fragged && !listed:
+				p.hosts.learn(host) // plain was cut, fragmented got through: it is blocked
+			case !a.fragged && listed:
+				p.noFrag.add(key) // this server refuses fragmented hellos
+			}
+			return conn, buf[:n], nil
+		}
+		if !isHangup(err) { // a timeout is no proof of anything: carry on
+			return conn, nil, nil
+		}
+		conn.Close()
 	}
-	if !isHangup(err) { // a timeout is not proof that fragmenting is the problem
-		return up, nil, nil
-	}
-
-	// The server hung up on the fragmented ClientHello: retry as it was.
-	up.Close()
-	up2, err := redial()
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := up2.Write(first); err != nil {
-		up2.Close()
-		return nil, nil, err
-	}
-	up2.SetReadDeadline(time.Now().Add(8 * time.Second))
-	n, err = up2.Read(buf)
-	up2.SetReadDeadline(time.Time{})
-	switch {
-	case n > 0:
-		p.noFrag.add(key) // only remember it when the plain hello really worked
-		return up2, buf[:n], nil
-	case isHangup(err):
-		up2.Close()
-		return nil, nil, errors.New("server closed the connection")
-	}
-	return up2, nil, nil
+	return nil, nil, errors.New("server closed the connection")
 }

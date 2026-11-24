@@ -11,7 +11,7 @@ e2e: build
 	go test -tags e2e -c -o e2e.test .
 	FRAGMA_BIN=$(CURDIR)/fragma unshare -Urn sh -c '\
 		ip link set lo up && \
-		ip addr add 203.0.113.5/32 dev lo && ip addr add 203.0.113.53/32 dev lo && ip addr add 10.1.2.3/32 dev lo && ip addr add 203.0.113.7/32 dev lo && \
+		ip addr add 203.0.113.5/32 dev lo && ip addr add 203.0.113.53/32 dev lo && ip addr add 10.1.2.3/32 dev lo && ip addr add 203.0.113.7/32 dev lo && ip addr add 203.0.113.8/32 dev lo && \
 		./e2e.test -test.run TestSandbox -test.v -test.count=1'
 	@rm -f e2e.test
 

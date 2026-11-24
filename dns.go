@@ -9,11 +9,9 @@ import (
 	"time"
 )
 
-var defaultDoH = []string{
-	"https://1.1.1.1/dns-query",
-	"https://9.9.9.9/dns-query",
-	"https://8.8.8.8/dns-query",
-}
+// One provider by default: a fallback would send your lookups to a second
+// company. Choose your own list with --doh.
+var defaultDoH = []string{"https://1.1.1.1/dns-query"}
 
 // dnsForwarder answers plain UDP DNS queries by asking a DNS-over-HTTPS server
 // (RFC 8484, binary POST). The query is passed through untouched, so no DNS
