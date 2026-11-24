@@ -21,7 +21,8 @@ sudo fragma uninstall   # remove everything
 
 ## It only touches blocked sites
 
-Most tools of this kind rewrite *all* your HTTPS traffic. fragma does not:
+fragma changes only the connections to blocked sites, and needs no setup to do so.
+(Zapret can do the same with its host lists; here it is the default.)
 
 - A site that is **not blocked is passed through byte for byte**, unchanged.
 - Sites that **are** blocked get their first TLS packet rewritten so the blocking box cannot read
@@ -123,6 +124,28 @@ Please tell us how it goes (open an issue).
 Your own sites and the learned ones live in `%AppData%\fragma` (`fragma add example.com`,
 `fragma list`). Where you need a mature, fully automatic Windows tool, use GoodbyeDPI.
 
+## fragma and Zapret
+
+Both get around SNI-based blocks, in different ways. Neither is "better": they suit different cases.
+
+| | Zapret | fragma |
+|---|---|---|
+| Approach | Packet level (NFQUEUE): fake packets, TTL tricks, splitting, reordering. Also a proxy mode (`tpws`) | Transparent proxy: rewrites the first TLS message into two valid TLS records |
+| Techniques | Many; you pick what works on your ISP (`blockcheck` helps) | One: TLS record fragmentation |
+| UDP / QUIC / IPv6 / HTTP (port 80) | Yes | No |
+| Platforms | Linux, OpenWrt routers, BSD, macOS, Windows | Linux. Windows: experimental proxy |
+| Setup | Pick a strategy, edit a config | None for the typical case |
+| Only blocked sites | Yes, with host lists / auto host list | Yes, by default |
+| Overhead | Typically only the first packets of a connection | Every HTTPS (port 443) connection is relayed by fragma |
+| Size | C, large feature set | Go, under 2,000 lines, standard library only |
+
+**Choose fragma** for a desktop Linux machine, an SNI-based block (Discord, Roblox, ...) and a simple,
+no-configuration tool. **Choose Zapret** for UDP/QUIC blocks, routers, BSD/macOS, difficult ISPs, or when you want
+to tune the technique yourself.
+
+On the connection we measured, Zapret's installed strategy (fake packets with a short TTL) did not help while TLS
+record fragmentation did. That is one ISP and one strategy: another Zapret strategy may well work there too.
+
 ## Limitations (please read)
 
 - **HTTPS (TCP) only.** UDP traffic is not touched. That includes Discord voice/video calls and
@@ -132,7 +155,7 @@ Your own sites and the learned ones live in `%AppData%\fragma` (`fragma add exam
   drops packets is not detected; add such a site by hand with `sudo fragma add`.
 - IPv4 only for now. It cannot help against blocks by IP address, only against SNI blocking (and
   DNS blocking if you turn on `fragma dns`).
-- Another tool that rewrites the same traffic (for example zapret) is redundant next to fragma.
+- Do not run another tool that rewrites the same traffic (for example Zapret) at the same time as fragma; use one of them.
 - It only changes how *your own* connection is written to the network. You are responsible for
   using it in line with the laws and terms of service that apply to you.
 
