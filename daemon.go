@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const (
@@ -66,7 +68,24 @@ func runDaemon(args []string) {
 		if *doh != "" {
 			ups = strings.Split(*doh, ",")
 		}
-		go (&dnsForwarder{conn: conn, client: newDoHClient(dial), upstreams: ups}).serve()
+		marked := &net.Resolver{PreferGo: true, Dial: markedDialer().DialContext}
+		servers := &pinnedDialer{dial: dial, lookup: func(ctx context.Context, host string) ([]net.IP, error) {
+			return marked.LookupIP(ctx, "ip4", host)
+		}}
+		// A server given by name is looked up now, while DNS still works as
+		// before. At boot the network may need a moment.
+		for end := time.Now().Add(30 * time.Second); ; time.Sleep(2 * time.Second) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := servers.pin(ctx, ups)
+			cancel()
+			if err == nil {
+				break
+			}
+			if time.Now().After(end) {
+				die("%v (DNS is left as it was)", err)
+			}
+		}
+		go (&dnsForwarder{conn: conn, client: newDoHClient(servers.DialContext), upstreams: ups}).serve()
 		mode = "HTTPS + DNS-over-HTTPS"
 	}
 
