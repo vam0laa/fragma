@@ -92,4 +92,21 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y nftables iproute2
       - run: make e2e
       - name: Install and update, with stand-ins
-        run: scripts/test/update.sh
+        run: scripts/test/update.sh && scripts/test/install.sh
+
+  systemd:
+    name: install and update on a real systemd (Linux)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: sudo apt-get update && sudo apt-get install -y nftables
+      # installs fragma on the runner, which is thrown away afterwards
+      - run: scripts/test/systemd.sh
+
