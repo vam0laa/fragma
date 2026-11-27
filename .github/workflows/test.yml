@@ -2,21 +2,36 @@ name: test
 
 on:
   push:
+    branches: ["**"] # tags are tested by the release workflow, which calls this one
   pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# a newer push to the same branch makes the older run pointless
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   unit:
     name: unit tests (${{ matrix.os }})
+    # pull requests from this repository are already tested by their push
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
       - run: go vet ./...
       - run: go test -count=1 ./...
       # The next steps change the proxy settings and the hosts file of the runner,
@@ -61,12 +76,16 @@ jobs:
 
   e2e:
     name: system-wide mode, end to end (Linux)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
       # Ubuntu 24.04 blocks unprivileged user namespaces; the test needs one
       # (it never touches the runner's real network).
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
