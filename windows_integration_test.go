@@ -8,6 +8,7 @@ package main
 //	go build -o fragma.exe . && FRAGMA_WIN_INTEGRATION=1 FRAGMA_BIN=...\fragma.exe go test -run Integration -v .
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -572,5 +573,73 @@ func TestIntegrationMissingRegistryKey(t *testing.T) {
 	v, err := readRegString(`HKCU\Software\FragmaTestNoSuchKey`, "fragma")
 	if err != nil || v.Set {
 		t.Fatalf("value %+v, error %v", v, err)
+	}
+}
+
+// `fragma report` while fragma runs and after it stopped, on the real system:
+// the states are right and nothing of the account is in it.
+func TestIntegrationReport(t *testing.T) {
+	throwawayRunner(t)
+	bin, original, state := integration(t)
+	t.Setenv("FRAGMA_LANG", "en")
+	dir := filepath.Dir(filepath.Dir(state))
+	own := userFile("hosts.txt")
+	os.MkdirAll(filepath.Dir(own), 0o755)
+	if err := os.WriteFile(own, []byte("secret-site.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	produce := func(name string, args ...string) (Report, string) {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		out, err := exec.Command(bin, append([]string{"report", "--output", path}, args...)...).Output()
+		if err != nil {
+			t.Fatal(err, string(out))
+		}
+		saved, err := os.ReadFile(path)
+		if err != nil || string(saved) != string(out) {
+			t.Fatal("shown and saved differ", err)
+		}
+		t.Logf("%s:\n%s", name, saved)
+		low := strings.ToLower(string(saved))
+		for _, secret := range []string{os.Getenv("USERNAME"), os.Getenv("COMPUTERNAME"), `c:\users`, "secret-site", "127.0.0.1", dir} {
+			if secret != "" && strings.Contains(low, strings.ToLower(secret)) {
+				t.Errorf("the report holds %q", secret)
+			}
+		}
+		var r Report
+		if err := json.Unmarshal(saved, &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.Windows == nil || r.Linux != nil || r.System.Name != "windows" || r.System.Version == "unknown" || *r.State.OwnSites != 1 {
+			t.Fatalf("report %+v", r)
+		}
+		return r, low
+	}
+	startRun(t, bin)
+	on, _ := produce("on.json")
+	if !*on.State.Running || on.Windows.SystemProxy != "fragma" || len(on.Sites) != len(reportHosts) {
+		t.Errorf("while running: %+v %+v", on.State, on.Windows)
+	}
+	// the test connections really go through fragma's proxy
+	for _, s := range on.Sites {
+		if s.Route != "fragma" || s.AsIs == nil {
+			t.Errorf("%s: not tested through the proxy: %+v", s.Host, s)
+		}
+		if s.Host == controlHost && s.AsIs != nil && s.AsIs.Answered == 0 {
+			t.Errorf("the control site did not answer through the proxy: %+v", s.AsIs)
+		}
+	}
+	if c, _ := (winProxy{}).get(); c.Server != testAddr {
+		t.Error("a report must change nothing")
+	}
+	if out, err := exec.Command(bin, "stop").CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	off, _ := produce("off.json", "--no-net")
+	if *off.State.Running || off.Windows.SystemProxy != "none" || off.Windows.RestorePending || off.SitesTested {
+		t.Errorf("after stop: %+v %+v", off.State, off.Windows)
+	}
+	if c, _ := (winProxy{}).get(); c != original {
+		t.Errorf("settings differ: %+v", c)
 	}
 }

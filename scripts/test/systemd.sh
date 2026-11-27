@@ -90,6 +90,17 @@ check "nothing is left" test ! -e $bin -a ! -e $unit
 check "no rules" not rules
 check "the web still works" web
 
+echo "fragma report, with the installed service running"
+check "as a user" sh -c "'$t/good' report --output '$t/user.json' > /dev/null"
+check "  running, installed, same version" jq -e '.state.running and .state.installed and .linux.service_enabled and .windows == null' "$t/user.json"
+check "  no failed check" jq -e '.failed_checks == []' "$t/user.json"
+check "as root, reading the log" sh -c "sudo '$t/good' report --output '$t/root.json' > /dev/null && sudo chmod 644 '$t/root.json'"
+check "  the log was read and understood" jq -e '.log_status == "read" and ([.log_events[].code] | index("started") != null)' "$t/root.json"
+check "  no host name, user or path in it" not grep -qiF -e "$(hostname)" -e "$(id -un)" -e /home/ "$t/root.json"
+check "  no address in it" not grep -qE '([0-9]{1,3}\.){3}[0-9]{1,3}' "$t/root.json"
+check "the report changed nothing" rules
+jq -c '{checks: [.checks[] | .id + "=" + .status], sites: [.sites[] | .host + " " + (.as_is.answered|tostring)], log: .log_events, unknown: .unrecognised_log_lines}' "$t/root.json"
+
 echo "install.sh, as a user who may use sudo and as root"
 mkdir "$t/release" "$t/pack"
 cp "$t/good" "$t/pack/fragma"
