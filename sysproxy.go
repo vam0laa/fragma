@@ -53,15 +53,15 @@ func localBypass() string {
 
 var errForeignProxy = errors.New("another proxy is already configured")
 
-// ourConfig is the configuration to set. Only HTTPS goes to fragma: it speaks
-// nothing but CONNECT, so plain HTTP must keep going direct.
+// ourConfig is the configuration to set. The server is written as a bare
+// address: the Discord updater cannot read the "https=host:port" form.
 func ourConfig(old proxyConfig, addr string) (proxyConfig, error) {
 	if old.Flags&flagPAC != 0 && old.PAC != "" || old.Flags&flagProxy != 0 && old.Server != "" {
 		return proxyConfig{}, errForeignProxy
 	}
 	c := old
 	c.Flags |= flagDirect | flagProxy
-	c.Server = "https=" + addr
+	c.Server = addr
 	c.Bypass = localBypass()
 	if old.Bypass != "" {
 		c.Bypass = old.Bypass + ";" + c.Bypass

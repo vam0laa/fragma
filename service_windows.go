@@ -124,7 +124,13 @@ func runDaemon(args []string) {
 	go hosts.watch(stop)
 	// DNS is left to the system unless asked for: an empty answer makes the
 	// proxy use the system resolver.
-	resolve := func(context.Context, string) []net.IP { return nil }
+	// App hosts are the exception: the hosts file may point them at ourselves.
+	resolve := func(ctx context.Context, host string) []net.IP {
+		if isAppHost(host) {
+			return dohDNS(ctx, host)
+		}
+		return nil
+	}
 	mode := T("win.dnsoff")
 	if o.dns {
 		resolve, mode = dohDNS, T("win.dnson")
@@ -132,6 +138,18 @@ func runDaemon(args []string) {
 	p := &proxy{tlsPort: "443", cache: map[string]cached{}, resolve: resolve, hosts: hosts}
 	done := make(chan struct{})
 	go func() { p.serve(ln); close(done) }()
+
+	// the relay for programs that ignore the proxy (see `fragma apps`)
+	relay := &proxy{tlsPort: "443", resolve: cachedResolver(dohDNS), hosts: hosts}
+	for _, a := range []string{"127.0.0.1:443", "[::1]:443"} {
+		rl, err := net.Listen("tcp", a)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "app relay:", err)
+			continue
+		}
+		defer rl.Close()
+		go relay.serveDirect(rl)
+	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -339,6 +357,9 @@ func runInstall(args []string) {
 func runUninstall([]string) {
 	stopBackground()
 	reg("delete", runKey, "/v", "fragma", "/f") // fails if absent
+	if appsEnabled() {
+		runApps([]string{"off"}) // the entries are useless without fragma
+	}
 	dst := installPath()
 	if exists(dst) {
 		if strings.EqualFold(self(), dst) {
@@ -376,6 +397,8 @@ func runDNS([]string)      { fail(T("win.nodns")) }
 // platformCommand handles the commands only this system has.
 func platformCommand(name string, args []string) bool {
 	switch name {
+	case "apps":
+		runApps(args)
 	case "restore":
 		runRestore()
 	case "guard":

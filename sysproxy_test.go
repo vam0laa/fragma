@@ -29,8 +29,8 @@ func TestEnableAndRestoreProxy(t *testing.T) {
 	if err := enableProxy(b, path, "127.0.0.1:8899", 1); err != nil {
 		t.Fatal(err)
 	}
-	if b.c.Server != "https=127.0.0.1:8899" {
-		t.Fatalf("only HTTPS may go to the proxy, got %q", b.c.Server)
+	if b.c.Server != "127.0.0.1:8899" {
+		t.Fatalf("the proxy must be a bare address, got %q", b.c.Server)
 	}
 	if b.c.Flags != orig.Flags|flagProxy || !strings.HasPrefix(b.c.Bypass, "intranet.test;") || !strings.Contains(b.c.Bypass, "172.31.*") {
 		t.Fatalf("config = %+v", b.c)

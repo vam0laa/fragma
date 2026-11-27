@@ -248,7 +248,7 @@ func main() {
 		case "dns":
 			runDNS(os.Args[2:])
 			return
-		case "restore", "guard":
+		case "restore", "guard", "apps":
 			if platformCommand(os.Args[1], os.Args[2:]) {
 				return
 			}

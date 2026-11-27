@@ -98,6 +98,10 @@ var catalog = map[string]map[string]string{
 		"dns.on":          "DNS-over-HTTPS is %s",
 		"dns.off":         "DNS is %s (your system DNS is used as is)",
 		"dns.untouched":   "untouched",
+		"win.appsusage":   "usage: fragma apps on | off | status",
+		"win.appsfail":    "the hosts file was not changed (was the administrator prompt declined?)",
+		"win.appson":      "apps that ignore the proxy (Discord updater): ON. fragma must be running.",
+		"win.appsoff":     "apps that ignore the proxy: OFF (hosts file has no fragma entries)",
 		"win.already":     "fragma is already running",
 		"win.foreign":     "another proxy or setup script is already configured in Windows; fragma will not overwrite it. Turn it off first (Settings > Network & internet > Proxy)",
 		"win.running":     "fragma is running on %s (%s). Press Ctrl+C to stop.",
@@ -118,10 +122,11 @@ var catalog = map[string]map[string]string{
 		"usage.win": `fragma %s: get around SNI-based access blocks (Discord, Roblox, ...)
 
   fragma install          install and start (also starts at every sign-in)
-  fragma start            turn it on (sets the Windows HTTPS proxy)
+  fragma start            turn it on (sets the Windows proxy)
   fragma stop             turn it off (restores your proxy settings)
   fragma status           is it on?
   fragma uninstall        remove it
+  fragma apps on|off      for apps that ignore the proxy, e.g. Discord (asks for admin)
 
   fragma add <site>       also treat this site as blocked
   fragma list             which sites does fragma change? (all others: none)
@@ -131,7 +136,7 @@ var catalog = map[string]map[string]string{
   fragma run              like start, but in this window
   fragma proxy            only the local proxy, Windows settings untouched
 
-No administrator rights needed. Option for install/start/run: --dns (DNS-over-HTTPS)
+No administrator rights needed except for apps on|off. Option for install/start/run: --dns (DNS-over-HTTPS)
 Language: FRAGMA_LANG=tr or en (default: Windows display language)
 `,
 		"usage.other": `fragma %s (experimental on this system): get around SNI-based access blocks (Discord, Roblox, ...)
@@ -221,6 +226,10 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 		"dns.on":          "DNS-over-HTTPS %s",
 		"dns.off":         "DNS %s (sistem DNS'in olduğu gibi kullanılıyor)",
 		"dns.untouched":   "dokunulmuyor",
+		"win.appsusage":   "kullanım: fragma apps on | off | status",
+		"win.appsfail":    "hosts dosyası değiştirilmedi (yönetici onayı reddedildi mi?)",
+		"win.appson":      "proxy kullanmayan uygulamalar (Discord güncelleyicisi): AÇIK. fragma çalışıyor olmalı.",
+		"win.appsoff":     "proxy kullanmayan uygulamalar: KAPALI (hosts dosyasında fragma kaydı yok)",
 		"win.already":     "fragma zaten çalışıyor",
 		"win.foreign":     "Windows'ta başka bir proxy veya kurulum betiği ayarlı; fragma üzerine yazmaz. Önce onu kapat (Ayarlar > Ağ ve internet > Proxy)",
 		"win.running":     "fragma %s üzerinde çalışıyor (%s). Durdurmak için Ctrl+C.",
@@ -241,10 +250,11 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 		"usage.win": `fragma %s: SNI tabanlı erişim engellerini aşar (Discord, Roblox, ...)
 
   fragma install          kur ve başlat (her oturum açışında da başlar)
-  fragma start            aç (Windows HTTPS proxy'sini ayarlar)
+  fragma start            aç (Windows proxy'sini ayarlar)
   fragma stop             kapat (proxy ayarlarını geri yükler)
   fragma status           açık mı?
   fragma uninstall        kaldır
+  fragma apps on|off      proxy kullanmayan uygulamalar için, örn. Discord (yönetici sorar)
 
   fragma add <site>       bu siteyi de engelli say
   fragma list             fragma hangi siteleri değiştiriyor? (diğer hepsi: hiçbiri)
@@ -254,7 +264,7 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
   fragma run              start gibi, ama bu pencerede
   fragma proxy            yalnızca yerel proxy, Windows ayarlarına dokunmaz
 
-Yönetici yetkisi gerekmez. install/start/run seçeneği: --dns (DNS-over-HTTPS)
+apps on|off dışında yönetici yetkisi gerekmez. install/start/run seçeneği: --dns (DNS-over-HTTPS)
 Dil: FRAGMA_LANG=tr veya en (varsayılan: Windows görüntü dili)
 `,
 		"usage.other": `fragma %s (bu sistemde deneysel): SNI tabanlı erişim engellerini aşar (Discord, Roblox, ...)

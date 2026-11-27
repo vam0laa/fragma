@@ -99,6 +99,17 @@ func (winProxy) set(c proxyConfig) error {
 	if r == 0 {
 		return fmt.Errorf("changing the proxy settings: %w", err)
 	}
+	// Some programs (the Discord updater) read the plain registry values, which
+	// Windows does not always bring in line with the settings above.
+	for name, v := range map[string]string{"ProxyServer": c.Server, "ProxyOverride": c.Bypass} {
+		if v != "" {
+			if err := regSet(inetKey, name, v); err != nil {
+				return err
+			}
+		} else {
+			reg("delete", inetKey, "/v", name, "/f") // fails if absent
+		}
+	}
 	// tell running programs to read the settings again
 	pInternetSetOption.Call(0, optSettingsChanged, 0, 0)
 	pInternetSetOption.Call(0, optRefresh, 0, 0)
@@ -106,6 +117,8 @@ func (winProxy) set(c proxyConfig) error {
 }
 
 const mutexName = `Local\fragma-system-mode`
+
+const inetKey = `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`
 
 // lockInstance takes the "system mode is running" lock. Windows drops it when
 // the process ends, however it ends. ok is false if someone else holds it.

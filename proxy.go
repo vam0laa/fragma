@@ -87,7 +87,7 @@ func (p *proxy) handle(client net.Conn) {
 		return
 	}
 	if req.Method != http.MethodConnect {
-		io.WriteString(client, "HTTP/1.1 405 Method Not Allowed\r\n\r\nvamola-dpi proxy supports HTTPS (CONNECT) only\r\n")
+		p.forwardHTTP(client, br, req)
 		return
 	}
 	host, port, err := net.SplitHostPort(req.Host)

@@ -106,7 +106,7 @@ tar xzf fragma-linux-amd64.tar.gz && sudo ./fragma install
 
 ## Windows (experimental)
 
-On Windows fragma runs in the background and sets itself as your **HTTPS proxy**. No administrator
+On Windows fragma runs in the background and sets itself as your **proxy**. No administrator
 rights and no driver are needed. The code is tested on Windows by CI, but it has **not been tried
 on many connections**. On one Windows 11 connection with SNI blocking and DNS blocking, Discord and
 Roblox failed directly and answered 5 of 5 requests with `--dns`. Please tell us how it goes (open an issue).
@@ -128,15 +128,20 @@ Roblox failed directly and answered 5 of 5 requests with `--dns`. Please tell us
 | `fragma add <site>`, `fragma list` | Same as on Linux. Files are in `%AppData%\fragma`. |
 | `--dns` (for `install`, `start`, `run`) | Resolve names over DNS-over-HTTPS (Cloudflare). Off by default. |
 
-**What it changes:** the current user's proxy settings (`https=127.0.0.1:8899`, local and LAN
+**What it changes:** the current user's proxy settings (`127.0.0.1:8899`; plain HTTP is passed on unchanged; local and LAN
 addresses bypassed) while it runs, a `fragma` entry under the user's `Run` registry key after
 `install`, and a temporary `RunOnce` entry. Your previous proxy settings are saved first and put back
 by `stop`; after a crash by a small guard process; after a reboot or power loss at the next sign-in.
 If another proxy or setup script is already configured, fragma refuses to start.
 
+**Apps that ignore the proxy** (the Discord desktop app's updater does): run `fragma apps on` once and
+approve the administrator prompt. It adds a marked block to the Windows hosts file that points a few
+Discord names at your own machine, where fragma relays them and looks up the real address over
+DNS-over-HTTPS (Cloudflare), also without `--dns`. Those names work only while fragma runs. Remove the
+block with `fragma apps off` (`uninstall` does it too).
+
 **Limits:** only programs that follow the Windows proxy settings go through fragma (browsers do;
-some apps and games do not). Discord can be pointed at it with
-`--proxy-server=http://127.0.0.1:8899`. VPN and dial-up connections have their own proxy settings,
+some apps and games do not; see `fragma apps` above for Discord). VPN and dial-up connections have their own proxy settings,
 which are not changed. `fragma proxy` still starts only the local proxy, without touching Windows.
 Where you need packet-level handling, use GoodbyeDPI.
 
@@ -185,7 +190,7 @@ record fragmentation did. That is one ISP and one strategy: another Zapret strat
 | `sudo fragma dns on [--doh URL]` / `off` | Optional DNS-over-HTTPS, off by default. |
 | `fragma probe` | For each site: is DNS poisoned? IP blocked? SNI blocked? Every test is repeated 3 times because DPI is often intermittent. |
 | `fragma experiment [hosts...]` | Tries 6 ways of sending the TLS ClientHello, 10 times each, and prints success counts. |
-| `fragma proxy [--listen 127.0.0.1:8899] [--add site]` | A local HTTPS proxy for a single app, no root needed (the way to use fragma on Windows) (for example `discord --proxy-server=http://127.0.0.1:8899`). [`docs/proxy.pac`](docs/proxy.pac) sends only blocked sites through it. |
+| `fragma proxy [--listen 127.0.0.1:8899] [--add site]` | A local HTTPS proxy for a single app, no root needed (for example `discord --proxy-server=http://127.0.0.1:8899`). [`docs/proxy.pac`](docs/proxy.pac) sends only blocked sites through it. |
 | `sudo fragma run [--dns] [--doh URL] [--hosts FILE] [--state DIR]` | System-wide mode in the foreground (the service runs this). |
 
 ## Development
