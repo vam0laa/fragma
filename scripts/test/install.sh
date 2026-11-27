@@ -103,7 +103,13 @@ done
 echo "provenance with the GitHub CLI"
 stub gh 'case "$1 $2" in
     "auth status") [ "${GH_LOGIN:-yes}" = yes ] ;;
-    "attestation verify") [ "$3" = --help ] && exit 0; [ "${GH_RESULT:-pass}" = pass ] || { echo "Error: no matching attestation"; exit 1; } ;;
+    "attestation verify") [ "$3" = --help ] && exit 0; [ "${GH_RESULT:-pass}" = pass ] && exit 0
+        case $GH_RESULT in
+            net) echo "Error: failed to fetch bundle with URL: Get \"https://store.example/x\": net/http: TLS handshake timeout" ;;
+            gone) echo "Error: failed to fetch attestations: HTTP 404: Not Found" ;;
+            *) echo "Error: no matching attestation" ;;
+        esac
+        exit 1 ;;
 esac'
 installs "verified" "GitHub confirms" good
 installs "not logged in" "NOT verified: gh is not logged in" good GH_LOGIN=no
@@ -112,5 +118,8 @@ release new "$t/fragma"; echo '{}' > "$t/new/manifest.json"
 refuses "a workflow release that does not verify" "verification FAILED" new GH_RESULT=fail
 refuses "required, old release" "provenance could not be verified" good GH_RESULT=fail FRAGMA_REQUIRE_PROVENANCE=1
 installs "required and verified" "GitHub confirms" new FRAGMA_REQUIRE_PROVENANCE=1
+installs "the attestation store cannot be reached" "NOT verified: GitHub's proof could not be fetched" new GH_RESULT=net
+refuses "required, store not reachable" "provenance could not be verified" new GH_RESULT=net FRAGMA_REQUIRE_PROVENANCE=1
+refuses "a workflow release GitHub has no proof for" "verification FAILED" new GH_RESULT=gone
 
 [ "$failures" = 0 ] && echo PASS || { echo "$failures checks failed"; exit 1; }
