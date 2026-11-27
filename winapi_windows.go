@@ -23,7 +23,6 @@ var (
 	pOpenMutex           = kernel32.NewProc("OpenMutexW")
 	pSetConsoleMode      = kernel32.NewProc("SetConsoleMode")
 	pUILanguage          = kernel32.NewProc("GetUserDefaultUILanguage")
-	pReplaceFile         = kernel32.NewProc("ReplaceFileW")
 	pMessageBox          = syscall.NewLazyDLL("user32.dll").NewProc("MessageBoxW")
 )
 
@@ -240,24 +239,6 @@ func bypassRunning() []string {
 	}
 
 	return found
-}
-
-// replaceFile puts the file at tmp in the place of path, in one step. ReplaceFile
-// keeps the permissions and attributes of the file it replaces.
-var replaceFile = func(tmp, path string) error {
-	to, err := syscall.UTF16PtrFromString(path)
-	if err != nil {
-		return err
-	}
-	from, err := syscall.UTF16PtrFromString(tmp)
-	if err != nil {
-		return err
-	}
-	r, _, e := pReplaceFile.Call(uintptr(unsafe.Pointer(to)), uintptr(unsafe.Pointer(from)), 0, 0, 0, 0)
-	if r == 0 {
-		return &os.PathError{Op: "replace", Path: path, Err: e}
-	}
-	return nil
 }
 
 // messageBox shows a warning and waits until it is closed.

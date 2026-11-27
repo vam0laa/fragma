@@ -130,38 +130,40 @@ func TestIntegrationDamagedState(t *testing.T) {
 	}
 }
 
-// Replacing a file the way the hosts file is replaced keeps its permissions.
+// Replacing a file the way the hosts file is replaced keeps owner, group, access
+// list and attributes, also when the owner is not who replaces it.
 func TestIntegrationReplaceKeepsPermissions(t *testing.T) {
 	if os.Getenv("FRAGMA_WIN_INTEGRATION") == "" {
 		t.Skip("set FRAGMA_WIN_INTEGRATION")
 	}
-	dir := t.TempDir()
-	path := filepath.Join(dir, "hosts")
-	if err := os.WriteFile(path, []byte("10.0.0.1 mine.test\r\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	// a permission only this file has
-	if out, err := exec.Command("icacls", path, "/grant", "*S-1-5-32-545:(R)").CombinedOutput(); err != nil {
-		t.Fatal(err, string(out))
-	}
-	acl := func() string {
-		out, err := exec.Command("icacls", path).CombinedOutput()
-		if err != nil {
-			t.Fatal(err, string(out))
-		}
-		return string(out)
-	}
-	before := acl()
-	for _, on := range []bool{true, false} {
-		if _, err := updateHosts(path, on); err != nil {
-			t.Fatal(err)
-		}
-		if after := acl(); after != before {
-			t.Fatalf("permissions changed:\n%s\nto\n%s", before, after)
-		}
-	}
-	if b, _ := os.ReadFile(path); string(b) != "10.0.0.1 mine.test\r\n" {
-		t.Fatalf("content = %q", b)
+	for name, setup := range map[string][]string{
+		"inherited only":      nil,
+		"an entry of its own": {"/grant", "*S-1-5-32-545:(R)"},
+		"owned by SYSTEM":     {"/setowner", "*S-1-5-18"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "hosts")
+			if err := os.WriteFile(path, []byte("10.0.0.1 mine.test\r\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if setup != nil {
+				if out, err := exec.Command("icacls", append([]string{path}, setup...)...).CombinedOutput(); err != nil {
+					t.Fatal(err, string(out))
+				}
+			}
+			before := permissions(t, path)
+			for _, on := range []bool{true, false} {
+				if _, err := updateHosts(path, on); err != nil {
+					t.Fatal(err)
+				}
+				if after := permissions(t, path); after != before {
+					t.Fatalf("permissions changed:\n%s\nto\n%s", before, after)
+				}
+			}
+			if b, _ := os.ReadFile(path); string(b) != "10.0.0.1 mine.test\r\n" {
+				t.Fatalf("content = %q", b)
+			}
+		})
 	}
 }
 
@@ -363,6 +365,10 @@ func TestIntegrationRealHostsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	originalPerms := permissions(t, path)
+	originalSecurity, err := fileSecurity(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	backup := path + hostsBackup
 	if _, err := os.Stat(backup); !os.IsNotExist(err) {
 		t.Fatal("a backup is already there:", err)
@@ -376,6 +382,14 @@ func TestIntegrationRealHostsFile(t *testing.T) {
 		exec.Command("ipconfig", "/flushdns").Run()
 		if now, err := os.ReadFile(path); err != nil || string(now) != string(original) {
 			t.Error("CLEANUP: the hosts file differs from the original", err)
+		}
+		if p := permissions(t, path); p != originalPerms {
+			if err := setSecurity(path, originalSecurity); err != nil {
+				t.Error("CLEANUP could not restore the permissions:", err)
+			}
+			if p := permissions(t, path); p != originalPerms {
+				t.Error("CLEANUP: permissions differ from the original:", p)
+			}
 		}
 	})
 	apps := func(arg string) {

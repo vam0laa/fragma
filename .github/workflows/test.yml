@@ -28,6 +28,7 @@ jobs:
         run: |
           reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" "$env:RUNNER_TEMP\inet.reg" /y
           Copy-Item "$env:SystemRoot\System32\drivers\etc\hosts" "$env:RUNNER_TEMP\hosts.saved"
+          (Get-Acl "$env:SystemRoot\System32\drivers\etc\hosts").Sddl | Set-Content "$env:RUNNER_TEMP\hosts.sddl"
 
       - name: Windows recovery, against the real settings
         if: runner.os == 'Windows'
@@ -52,8 +53,11 @@ jobs:
           $left = (Get-FileHash $hosts).Hash -ne (Get-FileHash "$env:RUNNER_TEMP\hosts.saved").Hash
           if ($left) { Copy-Item "$env:RUNNER_TEMP\hosts.saved" $hosts -Force }
           reg import "$env:RUNNER_TEMP\inet.reg"
+          $want = Get-Content "$env:RUNNER_TEMP\hosts.sddl"
+          $have = (Get-Acl $hosts).Sddl
           if ($left) { Write-Output "::error::the tests left the hosts file changed (put back now)"; exit 1 }
-          Write-Output "hosts file as before: $((Get-FileHash $hosts).Hash)"
+          if ($have -ne $want) { Write-Output "::error::the tests left the hosts permissions changed: $have instead of $want"; exit 1 }
+          Write-Output "hosts file as before: $((Get-FileHash $hosts).Hash) $have"
 
   e2e:
     name: system-wide mode, end to end (Linux)
