@@ -246,3 +246,31 @@ func recoverDamaged(b proxyBackend, path string) error {
 	proxyWarn(message, path+".damaged")
 	return nil
 }
+
+// proxyKind says in one word whose the system proxy is. ours is the address
+// fragma set, if it is known.
+func proxyKind(c proxyConfig, ours string) string {
+	switch {
+	case c.Flags&flagProxy != 0 && c.Server != "" && (c.Server == ours ||
+		strings.HasPrefix(c.Server, "127.0.0.1:") && strings.HasSuffix(c.Bypass, localBypass())):
+		return "fragma"
+	case c.Flags&flagPAC != 0 && c.PAC != "":
+		return "setup_script"
+	case c.Flags&flagProxy != 0 && c.Server != "":
+		return "other"
+	}
+	return "none"
+}
+
+// windowsChecks are the checks that only make sense on Windows.
+func windowsChecks(installed, running bool, w windowsInfo) []reportCheck {
+	return []reportCheck{
+		check("installed", installed, "FR_NOT_INSTALLED"),
+		check("running", running, "FR_NOT_RUNNING"),
+		warn("starts_by_itself", installed && !w.StartsAtSignIn, "FR_NOT_AT_BOOT"),
+		check("leftover_proxy", running || w.SystemProxy != "fragma", "FR_PROXY_LEFT"),
+		check("leftover_hosts", running || !w.AppsEntries, "FR_HOSTS_LEFT"),
+		check("saved_settings", !w.RestorePending, "FR_RESTORE_PENDING"),
+		warn("proxy_in_use", !running && (w.SystemProxy == "other" || w.SystemProxy == "setup_script"), "FR_PROXY_FOREIGN"),
+	}
+}

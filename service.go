@@ -164,6 +164,7 @@ func runInstall(args []string) {
 		cmd("sudo fragma start", T("box.start")),
 		cmd("fragma status", T("box.status")),
 		cmd("sudo fragma add <site>", T("box.add")),
+		cmd("fragma report", T("box.report")),
 		cmd("sudo fragma uninstall", T("box.uninstall")),
 		"",
 	}, cGreen))

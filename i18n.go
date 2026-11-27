@@ -148,6 +148,7 @@ var catalog = map[string]map[string]string{
 
   fragma probe            how is each site blocked on this connection?
   fragma experiment       which technique does your ISP's DPI not understand?
+  fragma report           a problem? shows a report you can share (sends nothing)
   fragma run              like start, but in this window
   fragma proxy            only the local proxy, Windows settings untouched
 
@@ -162,6 +163,7 @@ Language: FRAGMA_LANG=tr or en (default: Windows display language)
 
   fragma probe            how is each site blocked on this connection?
   fragma experiment       which technique does your ISP's DPI not understand?
+  fragma report           a problem? shows a report you can share (sends nothing)
 
 System-wide mode (install/stop/start) exists on Linux and Windows only.
 Language: FRAGMA_LANG=tr or en (default: from your locale)
@@ -180,6 +182,7 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 
   fragma probe            how is each site blocked on this connection?
   fragma experiment       which technique does your ISP's DPI not understand?
+  fragma report           a problem? shows a report you can share (sends nothing)
   fragma proxy            local HTTPS proxy, no root (per app)
   sudo fragma run         system-wide mode in the foreground (the service uses this)
 
@@ -291,6 +294,7 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 
   fragma probe            bu bağlantıda her site nasıl engelleniyor?
   fragma experiment       operatörünün DPI'ı hangi tekniği anlamıyor?
+  fragma report           sorun mu var? paylaşabileceğin raporu gösterir (bir şey göndermez)
   fragma run              start gibi, ama bu pencerede
   fragma proxy            yalnızca yerel proxy, Windows ayarlarına dokunmaz
 
@@ -305,6 +309,7 @@ Dil: FRAGMA_LANG=tr veya en (varsayılan: Windows görüntü dili)
 
   fragma probe            bu bağlantıda her site nasıl engelleniyor?
   fragma experiment       operatörünün DPI'ı hangi tekniği anlamıyor?
+  fragma report           sorun mu var? paylaşabileceğin raporu gösterir (bir şey göndermez)
 
 Sistem geneli mod (install/stop/start) yalnızca Linux ve Windows'ta var.
 Dil: FRAGMA_LANG=tr veya en (varsayılan: sistem dilinden)
@@ -323,6 +328,7 @@ Dil: FRAGMA_LANG=tr veya en (varsayılan: sistem dilinden)
 
   fragma probe            bu bağlantıda her site nasıl engelleniyor?
   fragma experiment       operatörünün DPI'ı hangi tekniği anlamıyor?
+  fragma report           sorun mu var? paylaşabileceğin raporu gösterir (bir şey göndermez)
   fragma proxy            yerel HTTPS proxy'si, root gerekmez (uygulama başına)
   sudo fragma run         sistem geneli mod, ön planda (servis bunu kullanır)
 

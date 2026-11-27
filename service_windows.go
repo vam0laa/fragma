@@ -444,7 +444,7 @@ func runInstall(args []string) {
 	}
 	fmt.Println()
 	fmt.Println("  " + T("win.manage"))
-	fmt.Printf("  & \"%s\" stop | start | status | uninstall\n\n", dst)
+	fmt.Printf("  & \"%s\" stop | start | status | report | uninstall\n\n", dst)
 }
 
 // runsHere checks that the file starts on this computer and is this version; an

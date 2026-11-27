@@ -254,6 +254,9 @@ func main() {
 			}
 			fmt.Printf(T(usageKey()), version)
 			return
+		case "report":
+			runReport(ctx, os.Args[2:])
+			return
 		case "version", "--version":
 			fmt.Println("fragma", version)
 			return
