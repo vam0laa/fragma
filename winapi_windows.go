@@ -23,6 +23,7 @@ var (
 	pOpenMutex           = kernel32.NewProc("OpenMutexW")
 	pSetConsoleMode      = kernel32.NewProc("SetConsoleMode")
 	pUILanguage          = kernel32.NewProc("GetUserDefaultUILanguage")
+	pMessageBox          = syscall.NewLazyDLL("user32.dll").NewProc("MessageBoxW")
 )
 
 const (
@@ -238,4 +239,15 @@ func bypassRunning() []string {
 	}
 
 	return found
+}
+
+// messageBox shows a warning and waits until it is closed.
+func messageBox(title, text string) {
+	t, err1 := syscall.UTF16PtrFromString(title)
+	m, err2 := syscall.UTF16PtrFromString(text)
+	if err1 != nil || err2 != nil {
+		return
+	}
+	const warningIcon, toFront = 0x30, 0x10000
+	pMessageBox.Call(0, uintptr(unsafe.Pointer(m)), uintptr(unsafe.Pointer(t)), warningIcon|toFront)
 }

@@ -19,6 +19,13 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test -count=1 ./...
+      # changes the proxy settings of the runner, which is thrown away afterwards
+      - name: Windows recovery, against the real settings
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          go build -o fragma.exe .
+          FRAGMA_WIN_INTEGRATION=1 FRAGMA_BIN="$(cygpath -w "$PWD/fragma.exe")" go test -count=1 -run Integration -v .
 
   e2e:
     name: system-wide mode, end to end (Linux)

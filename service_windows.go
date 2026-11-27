@@ -206,15 +206,47 @@ func cleanup() error {
 	return nil
 }
 
-// runRestore restores settings left behind by a run that is gone.
-func runRestore() {
+// runRestore restores settings left behind by a run that is gone. unattended
+// means nobody sees a console: the guard, or the entry run at sign-in. Then
+// problems go to the log file and a message box.
+func runRestore(unattended bool) {
 	release, ok, err := lockInstance()
 	if err != nil || !ok {
 		return // running: the settings are in use
 	}
 	defer release()
-	if err := cleanup(); err != nil {
-		fail(T("win.restorefail", err))
+	var notes []string
+	if unattended {
+		proxyWarn = func(key string, args ...any) { notes = append(notes, T(key, args...)) }
+	}
+	err = cleanup()
+	if err != nil {
+		if !unattended {
+			fail(T("win.restorefail", err))
+		}
+		// Windows removes a RunOnce entry before running it: set it again
+		if rerr := regSet(runOnceKey, "fragma-restore", `"`+self()+`" restore`); rerr != nil {
+			notes = append(notes, rerr.Error())
+		}
+		notes = append(notes, T("win.restorefail", err))
+	}
+	if len(notes) > 0 {
+		tellUser(strings.Join(notes, "\n\n"))
+	}
+	if err != nil {
+		os.Exit(1)
+	}
+}
+
+// tellUser records a message and shows it, for processes without a console.
+func tellUser(text string) {
+	os.MkdirAll(filepath.Dir(logFile()), 0o755)
+	if f, err := os.OpenFile(logFile(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		fmt.Fprintf(f, "%s %s\n", time.Now().Format(time.RFC3339), text)
+		f.Close()
+	}
+	if os.Getenv("FRAGMA_NO_DIALOG") == "" { // automated tests have nobody to close it
+		messageBox("fragma", text)
 	}
 }
 
@@ -231,7 +263,7 @@ func runGuard(args []string) {
 		p.Wait() // an error means we cannot wait for it; the check below still holds
 	}
 	if s, ok, err := readSaved(stateFile()); err != nil || ok && s.PID == pid {
-		runRestore()
+		runRestore(true)
 	}
 }
 
@@ -269,7 +301,7 @@ func startBackground(exe string, o runOpts) {
 		}
 	}
 	c.Process.Kill()
-	runRestore()
+	runRestore(false)
 	fail(T("win.startfail", logFile()))
 }
 
@@ -295,7 +327,7 @@ func stopBackground() {
 	if instanceRunning() {
 		fail(T("win.stopfail"))
 	}
-	runRestore()
+	runRestore(false)
 }
 
 func runControl(action string) {
@@ -402,7 +434,7 @@ func platformCommand(name string, args []string) bool {
 	case "apps":
 		runApps(args)
 	case "restore":
-		runRestore()
+		runRestore(true)
 	case "guard":
 		runGuard(args)
 	default:
