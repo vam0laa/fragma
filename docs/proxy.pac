@@ -1,4 +1,4 @@
-// Send only the blocked sites through vamola-dpi, everything else goes direct.
+// Send only the blocked sites through fragma proxy, everything else goes direct.
 // Firefox: Settings > Network Settings > "Automatic proxy configuration URL"
 //          file:///path/to/proxy.pac
 function FindProxyForURL(url, host) {
