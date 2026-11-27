@@ -19,13 +19,41 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go test -count=1 ./...
-      # changes the proxy settings of the runner, which is thrown away afterwards
+      # The next steps change the proxy settings and the hosts file of the runner,
+      # which is thrown away afterwards. Still, both are saved first and put back
+      # by a step that runs however the tests end.
+      - name: Save the runner's proxy settings and hosts file
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" "$env:RUNNER_TEMP\inet.reg" /y
+          Copy-Item "$env:SystemRoot\System32\drivers\etc\hosts" "$env:RUNNER_TEMP\hosts.saved"
+
       - name: Windows recovery, against the real settings
         if: runner.os == 'Windows'
         shell: bash
         run: |
           go build -o fragma.exe .
-          FRAGMA_WIN_INTEGRATION=1 FRAGMA_BIN="$(cygpath -w "$PWD/fragma.exe")" go test -count=1 -run Integration -v .
+          export FRAGMA_WIN_INTEGRATION=1 FRAGMA_BIN="$(cygpath -w "$PWD/fragma.exe")"
+          go test -count=1 -timeout 5m -run Integration -v . 2>&1 | tee integration.log
+          # a test that was skipped proves nothing
+          if grep -q -e '--- SKIP' integration.log; then echo "::error::an integration test was skipped"; exit 1; fi
+          for t in GuardRestoresAfterKill RestoreAfterBothDie DamagedState ReplaceKeepsPermissions \
+                   PresetProxyComesBack LaterChangeSurvives ProxyInUseIsLeftAlone RealHostsFile; do
+              grep -q -e "--- PASS: TestIntegration$t " integration.log || { echo "::error::$t did not pass"; exit 1; }
+          done
+
+      - name: Put the runner back, and check
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $hosts = "$env:SystemRoot\System32\drivers\etc\hosts"
+          Get-Process fragma -ErrorAction SilentlyContinue | Stop-Process -Force
+          $left = (Get-FileHash $hosts).Hash -ne (Get-FileHash "$env:RUNNER_TEMP\hosts.saved").Hash
+          if ($left) { Copy-Item "$env:RUNNER_TEMP\hosts.saved" $hosts -Force }
+          reg import "$env:RUNNER_TEMP\inet.reg"
+          if ($left) { Write-Output "::error::the tests left the hosts file changed (put back now)"; exit 1 }
+          Write-Output "hosts file as before: $((Get-FileHash $hosts).Hash)"
 
   e2e:
     name: system-wide mode, end to end (Linux)
