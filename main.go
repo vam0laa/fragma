@@ -37,7 +37,7 @@ func classify(err error) string {
 	s := err.Error()
 	var ne net.Error
 	switch {
-	case strings.Contains(s, "connection reset"):
+	case strings.Contains(s, "connection reset"), strings.Contains(s, "forcibly closed"): // the latter is Windows
 		return "reset"
 	case errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout()):
 		return "timeout"
@@ -210,23 +210,6 @@ func probe(ctx context.Context, host string) row {
 	return r
 }
 
-// bypassRunning lists known DPI-bypass processes, since they mask the result.
-func bypassRunning() []string {
-	var found []string
-	ents, _ := os.ReadDir("/proc")
-	for _, e := range ents {
-		b, err := os.ReadFile("/proc/" + e.Name() + "/comm")
-		if err != nil {
-			continue
-		}
-		switch n := strings.TrimSpace(string(b)); n {
-		case "nfqws", "tpws", "spoofdpi", "ciadpi", "byedpi":
-			found = append(found, n)
-		}
-	}
-	return found
-}
-
 func main() {
 	ctx := context.Background()
 	if len(os.Args) == 1 {
@@ -265,6 +248,12 @@ func main() {
 		case "dns":
 			runDNS(os.Args[2:])
 			return
+		case "restore", "guard":
+			if platformCommand(os.Args[1], os.Args[2:]) {
+				return
+			}
+			fmt.Printf(T(usageKey()), version)
+			return
 		case "version", "--version":
 			fmt.Println("fragma", version)
 			return
@@ -295,11 +284,13 @@ func main() {
 	w.Flush()
 }
 
-// usageKey picks the help text that fits the system: the Linux one lists the
-// service commands, the other one only what exists there.
+// usageKey picks the help text that fits the system.
 func usageKey() string {
-	if runtime.GOOS == "linux" {
+	switch runtime.GOOS {
+	case "linux":
 		return "usage"
+	case "windows":
+		return "usage.win"
 	}
-	return "usage.win"
+	return "usage.other"
 }

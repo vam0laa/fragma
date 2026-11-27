@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package main
 
@@ -22,3 +22,5 @@ func runList()                   { runListUser() }
 func runDNS(args []string)       { unsupported(args) }
 func runStatus()                 { unsupported(nil) }
 func runControl(string)          { unsupported(nil) }
+
+func platformCommand(string, []string) bool { return false }
