@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -54,6 +56,53 @@ func cachedResolver(resolve func(context.Context, string) []net.IP) func(context
 			mu.Unlock()
 		}
 		return ips
+	}
+}
+
+// appRelay holds the listeners for programs that ignore the proxy. They exist
+// only while the hosts file sends such programs here.
+type appRelay struct {
+	addrs  []string
+	listen func(network, addr string) (net.Listener, error)
+	serve  func(net.Listener)
+	report func(error) // told once about each address that cannot be opened
+
+	on     atomic.Bool
+	open   map[string]net.Listener
+	failed map[string]bool
+}
+
+// active reports whether apps are switched on. Safe for concurrent use.
+func (r *appRelay) active() bool { return r.on.Load() }
+
+// update opens or closes the listeners to match on; call it again to retry an
+// address that was in use. Not safe for concurrent use.
+func (r *appRelay) update(on bool) {
+	r.on.Store(on)
+	if r.open == nil || !on {
+		for _, ln := range r.open {
+			ln.Close()
+		}
+		r.open, r.failed = map[string]net.Listener{}, map[string]bool{}
+	}
+	if !on {
+		return
+	}
+	for i, a := range r.addrs {
+		key := strconv.Itoa(i) + " " + a
+		if r.open[key] != nil {
+			continue
+		}
+		ln, err := r.listen("tcp", a)
+		if err != nil {
+			if !r.failed[key] && r.report != nil {
+				r.report(err)
+			}
+			r.failed[key] = true
+			continue
+		}
+		r.open[key] = ln
+		go r.serve(ln)
 	}
 }
 

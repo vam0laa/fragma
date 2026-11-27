@@ -124,11 +124,23 @@ func runDaemon(args []string) {
 	stop := make(chan struct{})
 	defer close(stop)
 	go hosts.watch(stop)
+	// the relay for programs that ignore the proxy (see `fragma apps`)
+	relay := &proxy{tlsPort: "443", resolve: cachedResolver(dohDNS), hosts: hosts}
+	apps := &appRelay{
+		addrs:  []string{"127.0.0.1:443", "[::1]:443"},
+		listen: net.Listen,
+		serve:  relay.serveDirect,
+		report: func(err error) { fmt.Fprintln(os.Stderr, "app relay:", err) },
+	}
+	apps.update(appsEnabled())
+	defer apps.update(false)
+
 	// DNS is left to the system unless asked for: an empty answer makes the
 	// proxy use the system resolver.
-	// App hosts are the exception: the hosts file may point them at ourselves.
+	// App hosts are the exception while apps are on: the hosts file points them
+	// at ourselves.
 	resolve := func(ctx context.Context, host string) []net.IP {
-		if isAppHost(host) {
+		if apps.active() && isAppHost(host) {
 			return dohDNS(ctx, host)
 		}
 		return nil
@@ -140,18 +152,6 @@ func runDaemon(args []string) {
 	p := &proxy{tlsPort: "443", cache: map[string]cached{}, resolve: resolve, hosts: hosts}
 	done := make(chan struct{})
 	go func() { p.serve(ln); close(done) }()
-
-	// the relay for programs that ignore the proxy (see `fragma apps`)
-	relay := &proxy{tlsPort: "443", resolve: cachedResolver(dohDNS), hosts: hosts}
-	for _, a := range []string{"127.0.0.1:443", "[::1]:443"} {
-		rl, err := net.Listen("tcp", a)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "app relay:", err)
-			continue
-		}
-		defer rl.Close()
-		go relay.serveDirect(rl)
-	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -176,7 +176,7 @@ func runDaemon(args []string) {
 	tick := time.NewTicker(200 * time.Millisecond)
 	defer tick.Stop()
 wait:
-	for {
+	for ticks := 1; ; ticks++ {
 		select {
 		case <-sig:
 			break wait
@@ -185,6 +185,9 @@ wait:
 		case <-tick.C:
 			if exists(stopFile()) {
 				break wait
+			}
+			if ticks%10 == 0 { // `fragma apps on` or `off` while we run
+				apps.update(appsEnabled())
 			}
 		}
 	}
@@ -208,8 +211,9 @@ func cleanup() error {
 
 // runRestore restores settings left behind by a run that is gone. unattended
 // means nobody sees a console: the guard, or the entry run at sign-in. Then
-// problems go to the log file and a message box.
-func runRestore(unattended bool) {
+// problems go to the log file and a message box. warnApps adds the warning about
+// hosts file entries that now lead nowhere.
+func runRestore(unattended, warnApps bool) {
 	release, ok, err := lockInstance()
 	if err != nil || !ok {
 		return // running: the settings are in use
@@ -229,6 +233,10 @@ func runRestore(unattended bool) {
 			notes = append(notes, rerr.Error())
 		}
 		notes = append(notes, T("win.restorefail", err))
+	}
+	// after a crash nothing else tells that Discord and Roblox now lead nowhere
+	if warnApps && appsEnabled() {
+		notes = append(notes, T("win.appsleft"))
 	}
 	if len(notes) > 0 {
 		tellUser(strings.Join(notes, "\n\n"))
@@ -263,7 +271,7 @@ func runGuard(args []string) {
 		p.Wait() // an error means we cannot wait for it; the check below still holds
 	}
 	if s, ok, err := readSaved(stateFile()); err != nil || ok && s.PID == pid {
-		runRestore(true)
+		runRestore(true, true)
 	}
 }
 
@@ -301,7 +309,7 @@ func startBackground(exe string, o runOpts) {
 		}
 	}
 	c.Process.Kill()
-	runRestore(false)
+	runRestore(false, false)
 	fail(T("win.startfail", logFile()))
 }
 
@@ -327,7 +335,7 @@ func stopBackground() {
 	if instanceRunning() {
 		fail(T("win.stopfail"))
 	}
-	runRestore(false)
+	runRestore(false, false)
 }
 
 func runControl(action string) {
@@ -337,9 +345,19 @@ func runControl(action string) {
 	}
 	if action == "stop" {
 		fmt.Printf("  %s %s\n", paint(cAmber, "○"), T("win.off"))
+		warnAppsLeft()
 		return
 	}
 	startBackground(self(), parseRunOpts(action, args))
+}
+
+func startsAtSignIn() bool { return reg("query", runKey, "/v", "fragma") == nil }
+
+// warnAppsLeft says what the hosts file entries do while fragma is not running.
+func warnAppsLeft() {
+	if appsEnabled() {
+		fmt.Printf("  %s %s\n", paint(cRed, "!"), T("win.appsleft"))
+	}
 }
 
 func runStatus() {
@@ -351,6 +369,7 @@ func runStatus() {
 	if exists(stateFile()) {
 		fmt.Println("  " + T("win.leftover"))
 	}
+	warnAppsLeft()
 	os.Exit(3)
 }
 
@@ -434,7 +453,8 @@ func platformCommand(name string, args []string) bool {
 	case "apps":
 		runApps(args)
 	case "restore":
-		runRestore(true)
+		// run at sign-in: no warning if fragma is about to start there as well
+		runRestore(true, !startsAtSignIn())
 	case "guard":
 		runGuard(args)
 	default:
