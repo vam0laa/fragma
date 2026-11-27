@@ -52,8 +52,9 @@ the earlier program is kept as `/usr/local/bin/fragma.old`.
 **What gets verified.** The SHA-256 checksum is always checked; it shows the file arrived whole.
 From 0.5.0 on, releases also carry GitHub *provenance*, which shows that this repository's release
 workflow built the file. The installer can check it only with the [GitHub CLI](https://cli.github.com)
-installed and logged in for the user who runs the script (with `sudo sh`, that is root). Otherwise
-it says **provenance NOT verified** and why, and goes on, unless you required it.
+installed and logged in for the user who runs the script (with `sudo sh`, that is root). Otherwise,
+and when the proof cannot be fetched (some networks block the server GitHub keeps it on), it says
+**provenance NOT verified** and why, and goes on, unless you required it.
 
 ## What you see
 

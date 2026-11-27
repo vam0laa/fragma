@@ -37,6 +37,7 @@ m() {
       p_oldgh)   echo "bu gh sürümü kaynak doğrulayamıyor" ;;
       p_login)   echo "gh ile giriş yapılmamış (gh auth login)" ;;
       p_none)    echo "bu sürümde kaynak kanıtı yok (0.4.0 ve öncesi)" ;;
+      p_net)     echo "GitHub'daki kanıt indirilemedi (ağ hatası)" ;;
       provfail)  echo "kaynak doğrulaması BAŞARISIZ, hiçbir şey kurulmadı: $2" ;;
       provreq)   echo "kaynak doğrulanamadı ve zorunlu tutuldu, hiçbir şey kurulmadı" ;;
       nft)       echo "nftables gerekli (Arch: pacman -S nftables, Debian/Ubuntu: apt install nftables)" ;;
@@ -70,6 +71,7 @@ m() {
       p_oldgh)   echo "this version of gh cannot verify provenance" ;;
       p_login)   echo "gh is not logged in (gh auth login)" ;;
       p_none)    echo "this release has no provenance (0.4.0 and earlier)" ;;
+      p_net)     echo "GitHub's proof could not be fetched (network error)" ;;
       provfail)  echo "provenance verification FAILED, nothing was installed: $2" ;;
       provreq)   echo "provenance could not be verified and is required, nothing was installed" ;;
       nft)       echo "nftables is required (Arch: pacman -S nftables, Debian/Ubuntu: apt install nftables)" ;;
@@ -122,6 +124,9 @@ provenance() {
   if gh attestation verify "$tmp/$file" --repo "$REPO" \
       --signer-workflow "$REPO/.github/workflows/release.yml" >"$tmp/gh.log" 2>&1; then
     ok "$(m l_prov)" "$(m d_prov)"
+  elif grep -qiE 'TLS handshake timeout|i/o timeout|dial tcp|no such host|connection (refused|reset)|network is unreachable|context deadline exceeded|Client\.Timeout' "$tmp/gh.log"; then
+    # the proof was not looked at: that is not the same as a proof that is wrong
+    unverified "$(m p_net)"
   elif fetch "$base/manifest.json" "$tmp/manifest.json" 2>/dev/null; then
     # releases made by the workflow have a manifest and must verify
     die "$(m provfail "$(grep -v '^$' "$tmp/gh.log" | tail -n 1)")"
