@@ -38,6 +38,9 @@ func runDaemon(args []string) {
 		fmt.Fprintf(os.Stderr, "  ✖ "+format+"\n", a...)
 		os.Exit(1)
 	}
+	if buildFault != "" {
+		die("this is a test build that does not start")
+	}
 	if os.Geteuid() != 0 {
 		die("system-wide mode needs root: sudo fragma run")
 	}
