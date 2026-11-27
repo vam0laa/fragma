@@ -403,7 +403,10 @@ func runInstall(args []string) {
 	wasRunning := instanceRunning()
 	oldAuto, err := readRegString(runKey, "fragma")
 	if err != nil {
-		fail(err.Error())
+		if !same {
+			os.Remove(staged)
+		}
+		fail(T("win.updnothing", err))
 	}
 	stopBackground()
 	var swap programSwap

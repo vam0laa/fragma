@@ -463,6 +463,7 @@ func TestIntegrationUpdate(t *testing.T) {
 		t.Fatal("FRAGMA_BROKEN_BIN is not set")
 	}
 	t.Setenv("FRAGMA_LANG", "en")
+	t.Logf("sign-in key at the start (nil: it exists): %v", reg("query", runKey))
 	if reg("query", runKey, "/v", "fragma") == nil {
 		t.Fatal("a fragma sign-in entry is already there")
 	}
@@ -500,7 +501,10 @@ func TestIntegrationUpdate(t *testing.T) {
 		}
 	}
 
-	install(broken, false)
+	// it must fail for the right reason: the program that does not start
+	if out := install(broken, false); !strings.Contains(out, "did not work") || !strings.Contains(out, "does not start") {
+		t.Error("a broken version failed for another reason")
+	}
 	absent("a first install that does not start")
 
 	install(good, true)
@@ -557,4 +561,16 @@ func regValueOf(t *testing.T, key, name string) string {
 		t.Fatal("reading", name, err)
 	}
 	return v.Value
+}
+
+// A value of a key that does not exist is simply absent: a new account may have
+// no Run key.
+func TestIntegrationMissingRegistryKey(t *testing.T) {
+	if os.Getenv("FRAGMA_WIN_INTEGRATION") == "" {
+		t.Skip("set FRAGMA_WIN_INTEGRATION")
+	}
+	v, err := readRegString(`HKCU\Software\FragmaTestNoSuchKey`, "fragma")
+	if err != nil || v.Set {
+		t.Fatalf("value %+v, error %v", v, err)
+	}
 }

@@ -100,8 +100,12 @@ func readRegString(path, name string) (regValue, error) {
 		return regValue{}, err
 	}
 	var key syscall.Handle
-	if err := syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, sub, 0, syscall.KEY_QUERY_VALUE, &key); err != nil {
-		return regValue{}, err
+	err = syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, sub, 0, syscall.KEY_QUERY_VALUE, &key)
+	if errors.Is(err, syscall.ERROR_FILE_NOT_FOUND) {
+		return regValue{}, nil // a new account may not have the key yet
+	}
+	if err != nil {
+		return regValue{}, fmt.Errorf("%s: %w", path, err)
 	}
 	defer syscall.RegCloseKey(key)
 	var typ, size uint32
