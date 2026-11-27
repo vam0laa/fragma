@@ -80,8 +80,8 @@ func (winProxy) get() (proxyConfig, error) {
 	}
 	c := proxyConfig{Flags: uint32(opts[0].value), Server: str(&opts[1]), Bypass: str(&opts[2]), PAC: str(&opts[3])}
 	var errS, errB error
-	c.Reg.Server, errS = readRegString("ProxyServer")
-	c.Reg.Bypass, errB = readRegString("ProxyOverride")
+	c.Reg.Server, errS = readRegString(inetKey, "ProxyServer")
+	c.Reg.Bypass, errB = readRegString(inetKey, "ProxyOverride")
 	if err := errors.Join(errS, errB); err != nil {
 		return proxyConfig{}, fmt.Errorf("reading the proxy settings: %w", err)
 	}
@@ -89,9 +89,9 @@ func (winProxy) get() (proxyConfig, error) {
 	return c, nil
 }
 
-// readRegString reads one string value of the Internet Settings key.
-func readRegString(name string) (regValue, error) {
-	sub, err := syscall.UTF16PtrFromString(strings.TrimPrefix(inetKey, `HKCU\`))
+// readRegString reads one string value of a key under HKCU.
+func readRegString(path, name string) (regValue, error) {
+	sub, err := syscall.UTF16PtrFromString(strings.TrimPrefix(path, `HKCU\`))
 	if err != nil {
 		return regValue{}, err
 	}

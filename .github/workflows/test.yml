@@ -50,12 +50,13 @@ jobs:
         shell: bash
         run: |
           go build -o fragma.exe .
-          export FRAGMA_WIN_INTEGRATION=1 FRAGMA_BIN="$(cygpath -w "$PWD/fragma.exe")"
+          go build -ldflags "-X main.buildFault=yes" -o broken.exe .
+          export FRAGMA_WIN_INTEGRATION=1 FRAGMA_BIN="$(cygpath -w "$PWD/fragma.exe")" FRAGMA_BROKEN_BIN="$(cygpath -w "$PWD/broken.exe")"
           go test -count=1 -timeout 5m -run Integration -v . 2>&1 | tee integration.log
           # a test that was skipped proves nothing
           if grep -q -e '--- SKIP' integration.log; then echo "::error::an integration test was skipped"; exit 1; fi
           for t in GuardRestoresAfterKill RestoreAfterBothDie DamagedState ReplaceKeepsPermissions \
-                   PresetProxyComesBack LaterChangeSurvives ProxyInUseIsLeftAlone RealHostsFile; do
+                   PresetProxyComesBack LaterChangeSurvives ProxyInUseIsLeftAlone RealHostsFile Update; do
               grep -q -e "--- PASS: TestIntegration$t " integration.log || { echo "::error::$t did not pass"; exit 1; }
           done
 

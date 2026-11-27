@@ -452,3 +452,109 @@ func TestIntegrationRealHostsFile(t *testing.T) {
 		t.Logf("%s: %d bytes back exactly, permissions unchanged: %s", name, len(start), originalPerms)
 	}
 }
+
+// An update to a version that does not start leaves the earlier one installed and
+// running; a good update keeps the one before.
+func TestIntegrationUpdate(t *testing.T) {
+	throwawayRunner(t)
+	good, original, _ := integration(t)
+	broken := os.Getenv("FRAGMA_BROKEN_BIN")
+	if broken == "" {
+		t.Fatal("FRAGMA_BROKEN_BIN is not set")
+	}
+	t.Setenv("FRAGMA_LANG", "en")
+	if reg("query", runKey, "/v", "fragma") == nil {
+		t.Fatal("a fragma sign-in entry is already there")
+	}
+	dst := filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "fragma", "fragma.exe")
+	t.Cleanup(func() {
+		exec.Command(good, "uninstall").Run()
+		killAll(t, "")
+		reg("delete", runKey, "/v", "fragma", "/f")
+		time.Sleep(time.Second) // let the files be released
+	})
+	install := func(bin string, wantOK bool) string {
+		t.Helper()
+		out, err := exec.Command(bin, "install", "--port", "18899").CombinedOutput()
+		t.Logf("%s install: %s", filepath.Base(bin), strings.TrimSpace(string(out)))
+		if (err == nil) != wantOK {
+			t.Fatalf("success must be %v: %v", wantOK, err)
+		}
+		return string(out)
+	}
+	same := func(a, b string) bool {
+		x, err1 := os.ReadFile(a)
+		y, err2 := os.ReadFile(b)
+		return err1 == nil && err2 == nil && string(x) == string(y)
+	}
+	absent := func(what string) {
+		t.Helper()
+		if _, err := os.Stat(dst); !os.IsNotExist(err) {
+			t.Error(what, "left the program:", err)
+		}
+		if reg("query", runKey, "/v", "fragma") == nil {
+			t.Error(what, "left a sign-in entry")
+		}
+		if c, _ := (winProxy{}).get(); c != original {
+			t.Errorf("%s changed the proxy settings: %+v", what, c)
+		}
+	}
+
+	install(broken, false)
+	absent("a first install that does not start")
+
+	install(good, true)
+	waitFor(t, "the installed version runs", func(c proxyConfig) bool { return c.Server == testAddr })
+	auto := regValueOf(t, runKey, "fragma")
+	time.Sleep(2 * time.Second)
+
+	out := install(broken, false)
+	if !strings.Contains(out, "previous version is back and running") {
+		t.Error("the user must be told what happened")
+	}
+	if !same(dst, good) {
+		t.Error("the earlier program is not back")
+	}
+	if got := regValueOf(t, runKey, "fragma"); got != auto {
+		t.Errorf("sign-in entry %q, want %q", got, auto)
+	}
+	waitFor(t, "the earlier version runs again", func(c proxyConfig) bool { return c.Server == testAddr })
+	if !instanceRunning() {
+		t.Fatal("fragma is not running")
+	}
+	time.Sleep(2 * time.Second)
+
+	// a newer program: the same with a few bytes after its end
+	newer := filepath.Join(t.TempDir(), "newer.exe")
+	b, err := os.ReadFile(good)
+	if err == nil {
+		err = os.WriteFile(newer, append(b, "newer"...), 0o755)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	install(newer, true)
+	waitFor(t, "the new version runs", func(c proxyConfig) bool { return c.Server == testAddr })
+	if !same(dst, newer) || !same(dst+".old", good) {
+		t.Error("the new program must be installed and the earlier one kept")
+	}
+	time.Sleep(2 * time.Second)
+
+	if out, err := exec.Command(newer, "uninstall").CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	waitFor(t, "uninstall restores", func(c proxyConfig) bool { return c == original })
+	time.Sleep(2 * time.Second)
+	absent("uninstall")
+	if _, err := os.Stat(dst + ".old"); !os.IsNotExist(err) {
+		t.Error("the kept program was left behind:", err)
+	}
+}
+
+func regValueOf(t *testing.T, key, name string) string {
+	v, err := readRegString(key, name)
+	if err != nil || !v.Set {
+		t.Fatal("reading", name, err)
+	}
+	return v.Value
+}

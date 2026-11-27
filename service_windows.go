@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -95,6 +96,9 @@ func (o runOpts) args() []string {
 // runDaemon is the system mode in the foreground.
 func runDaemon(args []string) {
 	o := parseRunOpts("run", args)
+	if buildFault != "" {
+		fail("this is a test build that does not start")
+	}
 	release, ok, err := lockInstance()
 	for i := 0; err == nil && !ok && i < 20; i++ { // a `restore` may hold it for a moment
 		time.Sleep(100 * time.Millisecond)
@@ -277,20 +281,26 @@ func runGuard(args []string) {
 
 // startBackground launches `exe run` hidden and waits until it is working.
 func startBackground(exe string, o runOpts) {
+	if err := tryStart(exe, o); err != nil {
+		fail(T("win.startfail", err))
+	}
+	stepOK(T("step.running"), T("d.running"))
+}
+
+func tryStart(exe string, o runOpts) error {
 	if instanceRunning() {
-		stepOK(T("step.running"), T("d.running"))
-		return
+		return nil
 	}
 	os.MkdirAll(filepath.Dir(logFile()), 0o755)
 	log, err := os.Create(logFile())
 	if err != nil {
-		fail(err.Error())
+		return err
 	}
 	defer log.Close()
 	c := hidden(exe, append([]string{"run"}, o.args()...)...)
 	c.Stderr = log
 	if err := c.Start(); err != nil {
-		fail(err.Error())
+		return err
 	}
 	exited := make(chan struct{})
 	go func() { c.Wait(); close(exited) }()
@@ -298,19 +308,18 @@ func startBackground(exe string, o runOpts) {
 		select {
 		case <-exited:
 			b, _ := os.ReadFile(logFile())
-			fail(T("win.startfail", strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(b)), "✖"))))
+			return errors.New(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(b)), "✖")))
 		case <-time.After(100 * time.Millisecond):
 		}
 		if s, ok, _ := readSaved(stateFile()); ok && s.PID == c.Process.Pid {
 			if cur, err := (winProxy{}).get(); err == nil && cur.Server == s.Ours {
-				stepOK(T("step.running"), T("d.running"))
-				return
+				return nil
 			}
 		}
 	}
 	c.Process.Kill()
 	runRestore(false, false)
-	fail(T("win.startfail", logFile()))
+	return errors.New(logFile())
 }
 
 // stopBackground ends a running system mode and restores the proxy settings.
@@ -374,37 +383,128 @@ func runStatus() {
 }
 
 // runInstall copies the program to %LocalAppData%\Programs\fragma, starts it
-// at every sign-in and starts it now.
+// at every sign-in and starts it now. If the new version cannot be started, the
+// earlier one and its sign-in entry are put back.
 func runInstall(args []string) {
 	o := parseRunOpts("install", args)
 	dst, src := installPath(), self()
-	stopBackground()
-	if !strings.EqualFold(src, dst) {
-		b, err := os.ReadFile(src)
+	same := strings.EqualFold(src, dst)
+	var staged string
+	if !same {
+		// try the new program before the running one is stopped
+		err := os.MkdirAll(filepath.Dir(dst), 0o755)
 		if err == nil {
-			err = os.MkdirAll(filepath.Dir(dst), 0o755)
+			staged, err = stageProgram(src, dst, runsHere)
 		}
-		for i := 0; err == nil; i++ { // the guard may still be closing the old file
-			if err = os.WriteFile(dst, b, 0o755); err == nil || i == 20 {
+		if err != nil {
+			fail(T("win.updnothing", err))
+		}
+	}
+	wasRunning := instanceRunning()
+	oldAuto, err := readRegString(runKey, "fragma")
+	if err != nil {
+		fail(err.Error())
+	}
+	stopBackground()
+	var swap programSwap
+	if !same {
+		for i := 0; ; i++ { // the guard may still be closing the old file
+			if swap, err = swapProgram(staged, dst); err == nil || i == 20 {
 				break
 			}
-			err = nil
 			time.Sleep(100 * time.Millisecond)
 		}
 		if err != nil {
-			fail(T("fail.copy", err))
+			os.Remove(staged)
+			fail(T("win.updfailed", err) + " " + putBack(nil, dst, oldAuto, wasRunning))
 		}
 	}
 	stepOK(T("step.installed"), dst)
 	auto := `"` + dst + `" start ` + strings.Join(o.args(), " ")
-	if err := regSet(runKey, "fragma", auto); err != nil {
-		fail(err.Error())
+	err = regSet(runKey, "fragma", auto)
+	if err == nil {
+		stepOK(T("step.service"), T("win.autostart"))
+		err = tryStart(dst, o)
 	}
-	stepOK(T("step.service"), T("win.autostart"))
-	startBackground(dst, o)
+	if err != nil {
+		var undo *programSwap
+		if !same {
+			undo = &swap
+		}
+		fail(T("win.updfailed", err) + " " + putBack(undo, dst, oldAuto, wasRunning))
+	}
+	stepOK(T("step.running"), T("d.running"))
+	if !same {
+		if err := swap.keep(); err != nil {
+			fmt.Fprintln(os.Stderr, "  ! "+err.Error())
+		}
+	}
 	fmt.Println()
 	fmt.Println("  " + T("win.manage"))
 	fmt.Printf("  & \"%s\" stop | start | status | uninstall\n\n", dst)
+}
+
+// runsHere checks that the file starts on this computer and is this version; an
+// antivirus may block or remove it.
+func runsHere(path string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "fragma "+version {
+		return fmt.Errorf("%s says %q", path, got)
+	}
+	return nil
+}
+
+// putBack undoes a failed update and says how it went. swap is nil if the
+// program was not replaced.
+func putBack(swap *programSwap, dst string, oldAuto regValue, wasRunning bool) string {
+	var problems []error
+	if swap != nil {
+		var err error
+		for i := 0; i < 20; i++ {
+			if err = swap.undo(); err == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err != nil {
+			problems = append(problems, err)
+		}
+	}
+	if oldAuto.Set {
+		if err := regSet(runKey, "fragma", oldAuto.Value); err != nil {
+			problems = append(problems, err)
+		}
+	} else {
+		reg("delete", runKey, "/v", "fragma", "/f") // fails if absent
+	}
+	// how the earlier version was started is known from its sign-in entry only
+	_, rest, installed := strings.Cut(oldAuto.Value, `" start`)
+	restarted := false
+	if len(problems) == 0 && wasRunning && oldAuto.Set && installed && exists(dst) {
+		if err := tryStart(dst, parseRunOpts("start", strings.Fields(rest))); err != nil {
+			problems = append(problems, err)
+		} else {
+			restarted = true
+		}
+	}
+	switch {
+	case len(problems) > 0:
+		return T("upd.broken", errors.Join(problems...))
+	case restarted:
+		return T("upd.restored")
+	case oldAuto.Set && wasRunning:
+		return T("win.updstopped")
+	case oldAuto.Set:
+		return T("upd.restoredoff")
+	case wasRunning:
+		return T("win.updstopped")
+	}
+	return T("upd.removed")
 }
 
 func runUninstall([]string) {
@@ -414,6 +514,9 @@ func runUninstall([]string) {
 		runApps([]string{"off"}) // the entries are useless without fragma
 	}
 	dst := installPath()
+	for _, p := range []string{dst + ".old", dst + ".rollback", dst + ".failed", stagedName(dst)} {
+		os.Remove(p)
+	}
 	if exists(dst) {
 		if strings.EqualFold(self(), dst) {
 			// a running program cannot delete itself: let cmd do it after we exit
