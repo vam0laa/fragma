@@ -113,7 +113,9 @@ func runDaemon(args []string) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		// leftover settings would point at whoever owns the port now
-		restoreProxy(winProxy{}, stateFile())
+		if rerr := restoreProxy(winProxy{}, stateFile()); rerr != nil {
+			fmt.Fprintln(os.Stderr, "  "+T("win.restorefail", rerr))
+		}
 		fail(err.Error())
 	}
 	defer ln.Close()
@@ -228,7 +230,7 @@ func runGuard(args []string) {
 	if p, err := os.FindProcess(pid); err == nil {
 		p.Wait() // an error means we cannot wait for it; the check below still holds
 	}
-	if s, ok, _ := readSaved(stateFile()); ok && s.PID == pid {
+	if s, ok, err := readSaved(stateFile()); err != nil || ok && s.PID == pid {
 		runRestore()
 	}
 }
