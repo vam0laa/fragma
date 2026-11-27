@@ -3,7 +3,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
+	"fmt"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +80,7 @@ func editHosts(content string, on bool) string {
 		nl = "\r\n"
 	}
 	var out strings.Builder
+	openEnded := false
 	var held strings.Builder // lines after a begin marker, until its end marker
 	inside := false
 	for _, line := range strings.SplitAfter(content, "\n") {
@@ -85,6 +89,7 @@ func editHosts(content string, on bool) string {
 			inside = true
 		case inside && t == hostsEnd:
 			inside = false
+			openEnded = !strings.HasSuffix(line, "\n")
 			held.Reset()
 		case inside:
 			held.WriteString(line)
@@ -94,17 +99,63 @@ func editHosts(content string, on bool) string {
 	}
 	out.WriteString(held.String()) // no end marker: do not throw lines away
 	s := out.String()
+	// A file that did not end in a newline got one before our block, which then
+	// ends without one: that is how we know to take it away again.
+	if openEnded && strings.HasSuffix(s, "\n") {
+		s = strings.TrimSuffix(strings.TrimSuffix(s, "\n"), "\r")
+	}
 	if !on {
 		return s
 	}
+	end := nl
 	if s != "" && !strings.HasSuffix(s, "\n") {
 		s += nl
+		end = ""
 	}
 	s += hostsBegin + nl
 	for _, h := range appHosts {
 		s += "127.0.0.1 " + h + nl + "::1 " + h + nl
 	}
-	return s + hostsEnd + nl
+	return s + hostsEnd + end
+}
+
+// hostsBackup is added to the name of the hosts file for the copy of its content
+// from before fragma's last change.
+const hostsBackup = ".fragma-backup"
+
+// updateHosts adds or removes fragma's block in the file at path. The old content
+// is saved first, and the file is replaced as a whole: it is never half written.
+func updateHosts(path string, on bool) (changed bool, err error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	// compare the whole content: a newer version may know more names
+	want := editHosts(string(b), on)
+	if want == string(b) {
+		return false, nil
+	}
+	if err := writeFileAtomic(path+hostsBackup, b, st.Mode().Perm()); err != nil {
+		return false, fmt.Errorf("backup: %w", err)
+	}
+	tmp, err := writeTemp(path, []byte(want), st.Mode().Perm())
+	if err != nil {
+		return false, err
+	}
+	// someone else may have written the file in the meantime
+	if now, err := os.ReadFile(path); err != nil || string(now) != string(b) {
+		os.Remove(tmp)
+		return false, errors.Join(errors.New("the hosts file changed while it was being edited"), err)
+	}
+	if err := replaceFile(tmp, path); err != nil {
+		os.Remove(tmp)
+		return false, err
+	}
+	return true, nil
 }
 
 // handleDirect serves a program that connected to us believing we are the

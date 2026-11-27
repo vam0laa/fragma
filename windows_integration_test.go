@@ -127,3 +127,38 @@ func TestIntegrationDamagedState(t *testing.T) {
 		t.Fatalf("the proxy must be off: %+v", c)
 	}
 }
+
+// Replacing a file the way the hosts file is replaced keeps its permissions.
+func TestIntegrationReplaceKeepsPermissions(t *testing.T) {
+	if os.Getenv("FRAGMA_WIN_INTEGRATION") == "" {
+		t.Skip("set FRAGMA_WIN_INTEGRATION")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hosts")
+	if err := os.WriteFile(path, []byte("10.0.0.1 mine.test\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// a permission only this file has
+	if out, err := exec.Command("icacls", path, "/grant", "*S-1-5-32-545:(R)").CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	acl := func() string {
+		out, err := exec.Command("icacls", path).CombinedOutput()
+		if err != nil {
+			t.Fatal(err, string(out))
+		}
+		return string(out)
+	}
+	before := acl()
+	for _, on := range []bool{true, false} {
+		if _, err := updateHosts(path, on); err != nil {
+			t.Fatal(err)
+		}
+		if after := acl(); after != before {
+			t.Fatalf("permissions changed:\n%s\nto\n%s", before, after)
+		}
+	}
+	if b, _ := os.ReadFile(path); string(b) != "10.0.0.1 mine.test\r\n" {
+		t.Fatalf("content = %q", b)
+	}
+}
