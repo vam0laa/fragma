@@ -1,4 +1,4 @@
-.PHONY: build test e2e release
+.PHONY: build test e2e dist release
 build:
 	go build -trimpath -ldflags "-s -w" -o fragma .
 test:
@@ -20,13 +20,10 @@ e2e:
 		./e2e.test -test.run TestSandbox -test.v -test.count=1'
 	@rm -f e2e.test e2e.resolv.conf
 
-# Static Linux binaries for GitHub Releases (amd64 + arm64) with checksums.
-release: test
-	rm -rf dist && mkdir -p dist
-	for arch in amd64 arm64; do \
-		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -ldflags "-s -w" -o dist/fragma . && \
-		tar -C dist --owner=0 --group=0 --numeric-owner -czf dist/fragma-linux-$$arch.tar.gz fragma && rm dist/fragma; \
-	done
-	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w" -o dist/fragma.exe .
-	bsdtar --format zip -cf dist/fragma-windows-amd64.zip -C dist fragma.exe && rm dist/fragma.exe
-	cd dist && sha256sum *.tar.gz *.zip > SHA256SUMS
+# The release files (Linux amd64 + arm64, Windows) with manifest and checksums,
+# checked. Releases are made by .github/workflows/release.yml, see docs/releasing.md.
+dist:
+	scripts/release/dist.sh
+	scripts/release/check.sh dist dist
+
+release: test dist
