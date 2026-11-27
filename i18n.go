@@ -47,6 +47,14 @@ var catalog = map[string]map[string]string{
 		"os.unsupported":  "this command is only available on Linux. On this system use: fragma proxy",
 		"fail.nohome":     "cannot find your user config folder",
 		"fail.root":       "this needs root: sudo fragma %s",
+		"fail.precheck":   "this system cannot run fragma, nothing was changed: %v",
+		"fail.notready":   "it did not finish starting, see: journalctl -u fragma -n 30",
+		"upd.failed":      "the new version did not work: %v.",
+		"upd.restored":    "The previous version is back and running.",
+		"upd.restoredoff": "The previous version is back; it stays switched off, as before.",
+		"upd.removed":     "Nothing was left installed.",
+		"upd.broken":      "The earlier state could not be restored completely: %v",
+		"step.kept":       "Kept",
 		"fail.copy":       "installing the binary: %v",
 		"fail.unit":       "writing the service file: %v",
 		"fail.reload":     "systemctl daemon-reload failed (is this a systemd system?)",
@@ -99,7 +107,9 @@ var catalog = map[string]map[string]string{
 		"dns.off":         "DNS is %s (your system DNS is used as is)",
 		"dns.untouched":   "untouched",
 		"win.appsusage":   "usage: fragma apps on | off | status",
+		"win.appsleft":    "fragma is not running, but the hosts file still points Discord and Roblox names at this computer: they will not open. Start fragma, or run: fragma apps off",
 		"win.appsfail":    "the hosts file was not changed (was the administrator prompt declined?)",
+		"win.appsbackup":  "the hosts file from before this change: %s",
 		"win.appson":      "apps that ignore the proxy (Discord updater): ON. fragma must be running.",
 		"win.appsoff":     "apps that ignore the proxy: OFF (hosts file has no fragma entries)",
 		"win.already":     "fragma is already running",
@@ -109,7 +119,12 @@ var catalog = map[string]map[string]string{
 		"win.dnsoff":      "system DNS",
 		"win.stopped":     "fragma stopped: your proxy settings are restored",
 		"win.restorefail": "could not restore the proxy settings: %v (check Settings > Network & internet > Proxy)",
+		"win.statelost":   "the saved proxy settings were damaged (kept as %s). fragma turned its proxy off; if you had proxy settings of your own, check Settings > Network & internet > Proxy",
+		"win.statebad":    "the saved proxy settings were damaged (kept as %s). The proxy in use is not fragma's and was not changed; check Settings > Network & internet > Proxy",
 		"win.startfail":   "fragma did not start: %s",
+		"win.updnothing":  "nothing was changed: %v",
+		"win.updfailed":   "the new version did not work: %v.",
+		"win.updstopped":  "The earlier settings are back, but fragma is not running: start it again.",
 		"win.stopfail":    "could not stop the running fragma",
 		"win.off":         "fragma is OFF. Your proxy settings are restored.",
 		"win.onhint":      "(stop with: fragma stop)",
@@ -133,6 +148,7 @@ var catalog = map[string]map[string]string{
 
   fragma probe            how is each site blocked on this connection?
   fragma experiment       which technique does your ISP's DPI not understand?
+  fragma report           a problem? shows a report you can share (sends nothing)
   fragma run              like start, but in this window
   fragma proxy            only the local proxy, Windows settings untouched
 
@@ -147,6 +163,7 @@ Language: FRAGMA_LANG=tr or en (default: Windows display language)
 
   fragma probe            how is each site blocked on this connection?
   fragma experiment       which technique does your ISP's DPI not understand?
+  fragma report           a problem? shows a report you can share (sends nothing)
 
 System-wide mode (install/stop/start) exists on Linux and Windows only.
 Language: FRAGMA_LANG=tr or en (default: from your locale)
@@ -165,6 +182,7 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 
   fragma probe            how is each site blocked on this connection?
   fragma experiment       which technique does your ISP's DPI not understand?
+  fragma report           a problem? shows a report you can share (sends nothing)
   fragma proxy            local HTTPS proxy, no root (per app)
   sudo fragma run         system-wide mode in the foreground (the service uses this)
 
@@ -175,6 +193,14 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 		"os.unsupported":  "bu komut yalnızca Linux'ta var. Bu sistemde şunu kullan: fragma proxy",
 		"fail.nohome":     "kullanıcı ayar klasörün bulunamadı",
 		"fail.root":       "bunun için yönetici yetkisi gerekir: sudo fragma %s",
+		"fail.precheck":   "bu sistem fragma'yı çalıştıramıyor, hiçbir şey değiştirilmedi: %v",
+		"fail.notready":   "başlaması tamamlanmadı, bak: journalctl -u fragma -n 30",
+		"upd.failed":      "yeni sürüm çalışmadı: %v.",
+		"upd.restored":    "Önceki sürüm geri kondu ve çalışıyor.",
+		"upd.restoredoff": "Önceki sürüm geri kondu; eskisi gibi kapalı duruyor.",
+		"upd.removed":     "Hiçbir şey kurulu bırakılmadı.",
+		"upd.broken":      "Eski durum tam olarak geri getirilemedi: %v",
+		"step.kept":       "Saklandı",
 		"fail.copy":       "program kurulamadı: %v",
 		"fail.unit":       "servis dosyası yazılamadı: %v",
 		"fail.reload":     "systemctl daemon-reload başarısız (sistem systemd tabanlı mı?)",
@@ -227,7 +253,9 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 		"dns.off":         "DNS %s (sistem DNS'in olduğu gibi kullanılıyor)",
 		"dns.untouched":   "dokunulmuyor",
 		"win.appsusage":   "kullanım: fragma apps on | off | status",
+		"win.appsleft":    "fragma çalışmıyor ama hosts dosyası Discord ve Roblox adlarını hâlâ bu bilgisayara yönlendiriyor: açılmazlar. fragma'yı başlat ya da şunu çalıştır: fragma apps off",
 		"win.appsfail":    "hosts dosyası değiştirilmedi (yönetici onayı reddedildi mi?)",
+		"win.appsbackup":  "hosts dosyasının bu değişiklikten önceki hali: %s",
 		"win.appson":      "proxy kullanmayan uygulamalar (Discord güncelleyicisi): AÇIK. fragma çalışıyor olmalı.",
 		"win.appsoff":     "proxy kullanmayan uygulamalar: KAPALI (hosts dosyasında fragma kaydı yok)",
 		"win.already":     "fragma zaten çalışıyor",
@@ -237,7 +265,12 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 		"win.dnsoff":      "sistem DNS'i",
 		"win.stopped":     "fragma durdu: proxy ayarların geri yüklendi",
 		"win.restorefail": "proxy ayarları geri yüklenemedi: %v (Ayarlar > Ağ ve internet > Proxy'yi kontrol et)",
+		"win.statelost":   "kayıtlı proxy ayarları bozulmuş (%s olarak saklandı). fragma kendi proxy'sini kapattı; kendi proxy ayarın vardıysa Ayarlar > Ağ ve internet > Proxy bölümünü kontrol et",
+		"win.statebad":    "kayıtlı proxy ayarları bozulmuş (%s olarak saklandı). Kullanılan proxy fragma'nın değil, değiştirilmedi; Ayarlar > Ağ ve internet > Proxy bölümünü kontrol et",
 		"win.startfail":   "fragma başlatılamadı: %s",
+		"win.updnothing":  "hiçbir şey değiştirilmedi: %v",
+		"win.updfailed":   "yeni sürüm çalışmadı: %v.",
+		"win.updstopped":  "Önceki ayarlar geri geldi ama fragma çalışmıyor: yeniden başlat.",
 		"win.stopfail":    "çalışan fragma durdurulamadı",
 		"win.off":         "fragma KAPALI. Proxy ayarların geri yüklendi.",
 		"win.onhint":      "(durdurmak için: fragma stop)",
@@ -261,6 +294,7 @@ Language: FRAGMA_LANG=tr or en (default: from your locale)
 
   fragma probe            bu bağlantıda her site nasıl engelleniyor?
   fragma experiment       operatörünün DPI'ı hangi tekniği anlamıyor?
+  fragma report           sorun mu var? paylaşabileceğin raporu gösterir (bir şey göndermez)
   fragma run              start gibi, ama bu pencerede
   fragma proxy            yalnızca yerel proxy, Windows ayarlarına dokunmaz
 
@@ -275,6 +309,7 @@ Dil: FRAGMA_LANG=tr veya en (varsayılan: Windows görüntü dili)
 
   fragma probe            bu bağlantıda her site nasıl engelleniyor?
   fragma experiment       operatörünün DPI'ı hangi tekniği anlamıyor?
+  fragma report           sorun mu var? paylaşabileceğin raporu gösterir (bir şey göndermez)
 
 Sistem geneli mod (install/stop/start) yalnızca Linux ve Windows'ta var.
 Dil: FRAGMA_LANG=tr veya en (varsayılan: sistem dilinden)
@@ -293,6 +328,7 @@ Dil: FRAGMA_LANG=tr veya en (varsayılan: sistem dilinden)
 
   fragma probe            bu bağlantıda her site nasıl engelleniyor?
   fragma experiment       operatörünün DPI'ı hangi tekniği anlamıyor?
+  fragma report           sorun mu var? paylaşabileceğin raporu gösterir (bir şey göndermez)
   fragma proxy            yerel HTTPS proxy'si, root gerekmez (uygulama başına)
   sudo fragma run         sistem geneli mod, ön planda (servis bunu kullanır)
 

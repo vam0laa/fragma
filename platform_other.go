@@ -9,6 +9,9 @@ import (
 
 func ansiOK() bool { return true }
 
+// replaceFile puts the file at tmp in the place of path, in one step.
+var replaceFile = os.Rename
+
 // osLocale: elsewhere the locale variables are all there is.
 func osLocale() string { return "en" }
 

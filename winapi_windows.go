@@ -23,6 +23,7 @@ var (
 	pOpenMutex           = kernel32.NewProc("OpenMutexW")
 	pSetConsoleMode      = kernel32.NewProc("SetConsoleMode")
 	pUILanguage          = kernel32.NewProc("GetUserDefaultUILanguage")
+	pMessageBox          = syscall.NewLazyDLL("user32.dll").NewProc("MessageBoxW")
 )
 
 const (
@@ -77,7 +78,53 @@ func (winProxy) get() (proxyConfig, error) {
 		}
 		return syscall.UTF16ToString(u)
 	}
-	return proxyConfig{Flags: uint32(opts[0].value), Server: str(&opts[1]), Bypass: str(&opts[2]), PAC: str(&opts[3])}, nil
+	c := proxyConfig{Flags: uint32(opts[0].value), Server: str(&opts[1]), Bypass: str(&opts[2]), PAC: str(&opts[3])}
+	var errS, errB error
+	c.Reg.Server, errS = readRegString(inetKey, "ProxyServer")
+	c.Reg.Bypass, errB = readRegString(inetKey, "ProxyOverride")
+	if err := errors.Join(errS, errB); err != nil {
+		return proxyConfig{}, fmt.Errorf("reading the proxy settings: %w", err)
+	}
+	c.Reg.Known = true
+	return c, nil
+}
+
+// readRegString reads one string value of a key under HKCU.
+func readRegString(path, name string) (regValue, error) {
+	sub, err := syscall.UTF16PtrFromString(strings.TrimPrefix(path, `HKCU\`))
+	if err != nil {
+		return regValue{}, err
+	}
+	n, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return regValue{}, err
+	}
+	var key syscall.Handle
+	err = syscall.RegOpenKeyEx(syscall.HKEY_CURRENT_USER, sub, 0, syscall.KEY_QUERY_VALUE, &key)
+	if errors.Is(err, syscall.ERROR_FILE_NOT_FOUND) {
+		return regValue{}, nil // a new account may not have the key yet
+	}
+	if err != nil {
+		return regValue{}, fmt.Errorf("%s: %w", path, err)
+	}
+	defer syscall.RegCloseKey(key)
+	var typ, size uint32
+	err = syscall.RegQueryValueEx(key, n, nil, &typ, nil, &size)
+	if errors.Is(err, syscall.ERROR_FILE_NOT_FOUND) {
+		return regValue{}, nil
+	}
+	if err != nil {
+		return regValue{}, err
+	}
+	buf := make([]uint16, size/2+1)
+	size = uint32(len(buf) * 2)
+	if err := syscall.RegQueryValueEx(key, n, nil, &typ, (*byte)(unsafe.Pointer(&buf[0])), &size); err != nil {
+		return regValue{}, err
+	}
+	if typ != syscall.REG_SZ {
+		return regValue{}, fmt.Errorf("%s has an unexpected type", name)
+	}
+	return regValue{Set: true, Value: syscall.UTF16ToString(buf)}, nil
 }
 
 func (winProxy) set(c proxyConfig) error {
@@ -101,9 +148,15 @@ func (winProxy) set(c proxyConfig) error {
 	}
 	// Some programs (the Discord updater) read the plain registry values, which
 	// Windows does not always bring in line with the settings above.
-	for name, v := range map[string]string{"ProxyServer": c.Server, "ProxyOverride": c.Bypass} {
-		if v != "" {
-			if err := regSet(inetKey, name, v); err != nil {
+	// When values read earlier are being put back, they are written as they were.
+	values := c.Reg
+	if !values.Known {
+		values.Server = regValue{Set: c.Server != "", Value: c.Server}
+		values.Bypass = regValue{Set: c.Bypass != "", Value: c.Bypass}
+	}
+	for name, v := range map[string]regValue{"ProxyServer": values.Server, "ProxyOverride": values.Bypass} {
+		if v.Set {
+			if err := regSet(inetKey, name, v.Value); err != nil {
 				return err
 			}
 		} else {
@@ -190,4 +243,15 @@ func bypassRunning() []string {
 	}
 
 	return found
+}
+
+// messageBox shows a warning and waits until it is closed.
+func messageBox(title, text string) {
+	t, err1 := syscall.UTF16PtrFromString(title)
+	m, err2 := syscall.UTF16PtrFromString(text)
+	if err1 != nil || err2 != nil {
+		return
+	}
+	const warningIcon, toFront = 0x30, 0x10000
+	pMessageBox.Call(0, uintptr(unsafe.Pointer(m)), uintptr(unsafe.Pointer(t)), warningIcon|toFront)
 }

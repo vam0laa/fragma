@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -95,6 +96,9 @@ func (o runOpts) args() []string {
 // runDaemon is the system mode in the foreground.
 func runDaemon(args []string) {
 	o := parseRunOpts("run", args)
+	if buildFault != "" {
+		fail("this is a test build that does not start")
+	}
 	release, ok, err := lockInstance()
 	for i := 0; err == nil && !ok && i < 20; i++ { // a `restore` may hold it for a moment
 		time.Sleep(100 * time.Millisecond)
@@ -113,7 +117,9 @@ func runDaemon(args []string) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		// leftover settings would point at whoever owns the port now
-		restoreProxy(winProxy{}, stateFile())
+		if rerr := restoreProxy(winProxy{}, stateFile()); rerr != nil {
+			fmt.Fprintln(os.Stderr, "  "+T("win.restorefail", rerr))
+		}
 		fail(err.Error())
 	}
 	defer ln.Close()
@@ -122,11 +128,23 @@ func runDaemon(args []string) {
 	stop := make(chan struct{})
 	defer close(stop)
 	go hosts.watch(stop)
+	// the relay for programs that ignore the proxy (see `fragma apps`)
+	relay := &proxy{tlsPort: "443", resolve: cachedResolver(dohDNS), hosts: hosts}
+	apps := &appRelay{
+		addrs:  []string{"127.0.0.1:443", "[::1]:443"},
+		listen: net.Listen,
+		serve:  relay.serveDirect,
+		report: func(err error) { fmt.Fprintln(os.Stderr, "app relay:", err) },
+	}
+	apps.update(appsEnabled())
+	defer apps.update(false)
+
 	// DNS is left to the system unless asked for: an empty answer makes the
 	// proxy use the system resolver.
-	// App hosts are the exception: the hosts file may point them at ourselves.
+	// App hosts are the exception while apps are on: the hosts file points them
+	// at ourselves.
 	resolve := func(ctx context.Context, host string) []net.IP {
-		if isAppHost(host) {
+		if apps.active() && isAppHost(host) {
 			return dohDNS(ctx, host)
 		}
 		return nil
@@ -138,18 +156,6 @@ func runDaemon(args []string) {
 	p := &proxy{tlsPort: "443", cache: map[string]cached{}, resolve: resolve, hosts: hosts}
 	done := make(chan struct{})
 	go func() { p.serve(ln); close(done) }()
-
-	// the relay for programs that ignore the proxy (see `fragma apps`)
-	relay := &proxy{tlsPort: "443", resolve: cachedResolver(dohDNS), hosts: hosts}
-	for _, a := range []string{"127.0.0.1:443", "[::1]:443"} {
-		rl, err := net.Listen("tcp", a)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "app relay:", err)
-			continue
-		}
-		defer rl.Close()
-		go relay.serveDirect(rl)
-	}
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
@@ -174,7 +180,7 @@ func runDaemon(args []string) {
 	tick := time.NewTicker(200 * time.Millisecond)
 	defer tick.Stop()
 wait:
-	for {
+	for ticks := 1; ; ticks++ {
 		select {
 		case <-sig:
 			break wait
@@ -183,6 +189,9 @@ wait:
 		case <-tick.C:
 			if exists(stopFile()) {
 				break wait
+			}
+			if ticks%10 == 0 { // `fragma apps on` or `off` while we run
+				apps.update(appsEnabled())
 			}
 		}
 	}
@@ -204,15 +213,52 @@ func cleanup() error {
 	return nil
 }
 
-// runRestore restores settings left behind by a run that is gone.
-func runRestore() {
+// runRestore restores settings left behind by a run that is gone. unattended
+// means nobody sees a console: the guard, or the entry run at sign-in. Then
+// problems go to the log file and a message box. warnApps adds the warning about
+// hosts file entries that now lead nowhere.
+func runRestore(unattended, warnApps bool) {
 	release, ok, err := lockInstance()
 	if err != nil || !ok {
 		return // running: the settings are in use
 	}
 	defer release()
-	if err := cleanup(); err != nil {
-		fail(T("win.restorefail", err))
+	var notes []string
+	if unattended {
+		proxyWarn = func(key string, args ...any) { notes = append(notes, T(key, args...)) }
+	}
+	err = cleanup()
+	if err != nil {
+		if !unattended {
+			fail(T("win.restorefail", err))
+		}
+		// Windows removes a RunOnce entry before running it: set it again
+		if rerr := regSet(runOnceKey, "fragma-restore", `"`+self()+`" restore`); rerr != nil {
+			notes = append(notes, rerr.Error())
+		}
+		notes = append(notes, T("win.restorefail", err))
+	}
+	// after a crash nothing else tells that Discord and Roblox now lead nowhere
+	if warnApps && appsEnabled() {
+		notes = append(notes, T("win.appsleft"))
+	}
+	if len(notes) > 0 {
+		tellUser(strings.Join(notes, "\n\n"))
+	}
+	if err != nil {
+		os.Exit(1)
+	}
+}
+
+// tellUser records a message and shows it, for processes without a console.
+func tellUser(text string) {
+	os.MkdirAll(filepath.Dir(logFile()), 0o755)
+	if f, err := os.OpenFile(logFile(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+		fmt.Fprintf(f, "%s %s\n", time.Now().Format(time.RFC3339), text)
+		f.Close()
+	}
+	if os.Getenv("FRAGMA_NO_DIALOG") == "" { // automated tests have nobody to close it
+		messageBox("fragma", text)
 	}
 }
 
@@ -228,27 +274,33 @@ func runGuard(args []string) {
 	if p, err := os.FindProcess(pid); err == nil {
 		p.Wait() // an error means we cannot wait for it; the check below still holds
 	}
-	if s, ok, _ := readSaved(stateFile()); ok && s.PID == pid {
-		runRestore()
+	if s, ok, err := readSaved(stateFile()); err != nil || ok && s.PID == pid {
+		runRestore(true, true)
 	}
 }
 
 // startBackground launches `exe run` hidden and waits until it is working.
 func startBackground(exe string, o runOpts) {
+	if err := tryStart(exe, o); err != nil {
+		fail(T("win.startfail", err))
+	}
+	stepOK(T("step.running"), T("d.running"))
+}
+
+func tryStart(exe string, o runOpts) error {
 	if instanceRunning() {
-		stepOK(T("step.running"), T("d.running"))
-		return
+		return nil
 	}
 	os.MkdirAll(filepath.Dir(logFile()), 0o755)
 	log, err := os.Create(logFile())
 	if err != nil {
-		fail(err.Error())
+		return err
 	}
 	defer log.Close()
 	c := hidden(exe, append([]string{"run"}, o.args()...)...)
 	c.Stderr = log
 	if err := c.Start(); err != nil {
-		fail(err.Error())
+		return err
 	}
 	exited := make(chan struct{})
 	go func() { c.Wait(); close(exited) }()
@@ -256,19 +308,18 @@ func startBackground(exe string, o runOpts) {
 		select {
 		case <-exited:
 			b, _ := os.ReadFile(logFile())
-			fail(T("win.startfail", strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(b)), "✖"))))
+			return errors.New(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(b)), "✖")))
 		case <-time.After(100 * time.Millisecond):
 		}
 		if s, ok, _ := readSaved(stateFile()); ok && s.PID == c.Process.Pid {
 			if cur, err := (winProxy{}).get(); err == nil && cur.Server == s.Ours {
-				stepOK(T("step.running"), T("d.running"))
-				return
+				return nil
 			}
 		}
 	}
 	c.Process.Kill()
-	runRestore()
-	fail(T("win.startfail", logFile()))
+	runRestore(false, false)
+	return errors.New(logFile())
 }
 
 // stopBackground ends a running system mode and restores the proxy settings.
@@ -293,7 +344,7 @@ func stopBackground() {
 	if instanceRunning() {
 		fail(T("win.stopfail"))
 	}
-	runRestore()
+	runRestore(false, false)
 }
 
 func runControl(action string) {
@@ -303,9 +354,19 @@ func runControl(action string) {
 	}
 	if action == "stop" {
 		fmt.Printf("  %s %s\n", paint(cAmber, "○"), T("win.off"))
+		warnAppsLeft()
 		return
 	}
 	startBackground(self(), parseRunOpts(action, args))
+}
+
+func startsAtSignIn() bool { return reg("query", runKey, "/v", "fragma") == nil }
+
+// warnAppsLeft says what the hosts file entries do while fragma is not running.
+func warnAppsLeft() {
+	if appsEnabled() {
+		fmt.Printf("  %s %s\n", paint(cRed, "!"), T("win.appsleft"))
+	}
 }
 
 func runStatus() {
@@ -317,41 +378,136 @@ func runStatus() {
 	if exists(stateFile()) {
 		fmt.Println("  " + T("win.leftover"))
 	}
+	warnAppsLeft()
 	os.Exit(3)
 }
 
 // runInstall copies the program to %LocalAppData%\Programs\fragma, starts it
-// at every sign-in and starts it now.
+// at every sign-in and starts it now. If the new version cannot be started, the
+// earlier one and its sign-in entry are put back.
 func runInstall(args []string) {
 	o := parseRunOpts("install", args)
 	dst, src := installPath(), self()
-	stopBackground()
-	if !strings.EqualFold(src, dst) {
-		b, err := os.ReadFile(src)
+	same := strings.EqualFold(src, dst)
+	var staged string
+	if !same {
+		// try the new program before the running one is stopped
+		err := os.MkdirAll(filepath.Dir(dst), 0o755)
 		if err == nil {
-			err = os.MkdirAll(filepath.Dir(dst), 0o755)
+			staged, err = stageProgram(src, dst, runsHere)
 		}
-		for i := 0; err == nil; i++ { // the guard may still be closing the old file
-			if err = os.WriteFile(dst, b, 0o755); err == nil || i == 20 {
+		if err != nil {
+			fail(T("win.updnothing", err))
+		}
+	}
+	wasRunning := instanceRunning()
+	oldAuto, err := readRegString(runKey, "fragma")
+	if err != nil {
+		if !same {
+			os.Remove(staged)
+		}
+		fail(T("win.updnothing", err))
+	}
+	stopBackground()
+	var swap programSwap
+	if !same {
+		for i := 0; ; i++ { // the guard may still be closing the old file
+			if swap, err = swapProgram(staged, dst); err == nil || i == 20 {
 				break
 			}
-			err = nil
 			time.Sleep(100 * time.Millisecond)
 		}
 		if err != nil {
-			fail(T("fail.copy", err))
+			os.Remove(staged)
+			fail(T("win.updfailed", err) + " " + putBack(nil, dst, oldAuto, wasRunning))
 		}
 	}
 	stepOK(T("step.installed"), dst)
 	auto := `"` + dst + `" start ` + strings.Join(o.args(), " ")
-	if err := regSet(runKey, "fragma", auto); err != nil {
-		fail(err.Error())
+	err = regSet(runKey, "fragma", auto)
+	if err == nil {
+		stepOK(T("step.service"), T("win.autostart"))
+		err = tryStart(dst, o)
 	}
-	stepOK(T("step.service"), T("win.autostart"))
-	startBackground(dst, o)
+	if err != nil {
+		var undo *programSwap
+		if !same {
+			undo = &swap
+		}
+		fail(T("win.updfailed", err) + " " + putBack(undo, dst, oldAuto, wasRunning))
+	}
+	stepOK(T("step.running"), T("d.running"))
+	if !same {
+		if err := swap.keep(); err != nil {
+			fmt.Fprintln(os.Stderr, "  ! "+err.Error())
+		}
+	}
 	fmt.Println()
 	fmt.Println("  " + T("win.manage"))
-	fmt.Printf("  & \"%s\" stop | start | status | uninstall\n\n", dst)
+	fmt.Printf("  & \"%s\" stop | start | status | report | uninstall\n\n", dst)
+}
+
+// runsHere checks that the file starts on this computer and is this version; an
+// antivirus may block or remove it.
+func runsHere(path string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "version").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	if got := strings.TrimSpace(string(out)); got != "fragma "+version {
+		return fmt.Errorf("%s says %q", path, got)
+	}
+	return nil
+}
+
+// putBack undoes a failed update and says how it went. swap is nil if the
+// program was not replaced.
+func putBack(swap *programSwap, dst string, oldAuto regValue, wasRunning bool) string {
+	var problems []error
+	if swap != nil {
+		var err error
+		for i := 0; i < 20; i++ {
+			if err = swap.undo(); err == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err != nil {
+			problems = append(problems, err)
+		}
+	}
+	if oldAuto.Set {
+		if err := regSet(runKey, "fragma", oldAuto.Value); err != nil {
+			problems = append(problems, err)
+		}
+	} else {
+		reg("delete", runKey, "/v", "fragma", "/f") // fails if absent
+	}
+	// how the earlier version was started is known from its sign-in entry only
+	_, rest, installed := strings.Cut(oldAuto.Value, `" start`)
+	restarted := false
+	if len(problems) == 0 && wasRunning && oldAuto.Set && installed && exists(dst) {
+		if err := tryStart(dst, parseRunOpts("start", strings.Fields(rest))); err != nil {
+			problems = append(problems, err)
+		} else {
+			restarted = true
+		}
+	}
+	switch {
+	case len(problems) > 0:
+		return T("upd.broken", errors.Join(problems...))
+	case restarted:
+		return T("upd.restored")
+	case oldAuto.Set && wasRunning:
+		return T("win.updstopped")
+	case oldAuto.Set:
+		return T("upd.restoredoff")
+	case wasRunning:
+		return T("win.updstopped")
+	}
+	return T("upd.removed")
 }
 
 func runUninstall([]string) {
@@ -361,6 +517,9 @@ func runUninstall([]string) {
 		runApps([]string{"off"}) // the entries are useless without fragma
 	}
 	dst := installPath()
+	for _, p := range []string{dst + ".old", dst + ".rollback", dst + ".failed", stagedName(dst)} {
+		os.Remove(p)
+	}
 	if exists(dst) {
 		if strings.EqualFold(self(), dst) {
 			// a running program cannot delete itself: let cmd do it after we exit
@@ -400,7 +559,8 @@ func platformCommand(name string, args []string) bool {
 	case "apps":
 		runApps(args)
 	case "restore":
-		runRestore()
+		// run at sign-in: no warning if fragma is about to start there as well
+		runRestore(true, !startsAtSignIn())
 	case "guard":
 		runGuard(args)
 	default:

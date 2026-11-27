@@ -42,7 +42,9 @@ func (p *proxy) handleTransparent(client net.Conn) {
 		return
 	}
 	ip, port, err := originalDst(tc)
-	if err != nil {
+	// The rules never redirect loopback addresses, so such a connection was made
+	// to our own port: relaying it would connect to ourselves again, without end.
+	if err != nil || ip.IsLoopback() {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

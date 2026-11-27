@@ -3,12 +3,15 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -101,45 +104,52 @@ func runInstall(args []string) {
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		fail(err.Error())
 	}
-	bin := filepath.Join(*prefix, binDest)
-	if exe != bin {
-		if err := copyFile(exe, bin, 0o755); err != nil {
-			fail(T("fail.copy", err))
+	// try this program on this system before anything is changed
+	if *prefix == "" {
+		if err := checkRules(ruleset(defaultTCPPort, defaultDNSPort, false)); err != nil {
+			fail(T("fail.precheck", err))
 		}
 	}
-	unit := filepath.Join(*prefix, unitDest)
-	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
-		fail(err.Error())
+	bin, unit := filepath.Join(*prefix, binDest), filepath.Join(*prefix, unitDest)
+	service := !*noSys
+	// an interrupted update would leave things half done
+	signal.Ignore(os.Interrupt, syscall.SIGHUP)
+	was, err := snapshot(bin, unit, service)
+	if err != nil {
+		fail(T("fail.copy", err))
 	}
-	if err := os.WriteFile(unit, []byte(unitText), 0o644); err != nil {
-		fail(T("fail.unit", err))
+	// With a prefix there are no real rules to look for.
+	ready := func() bool { return *prefix != "" || nft("", "list", "table", "ip", nftTable) == nil }
+	err = func() error {
+		if exe != bin {
+			if err := copyFile(exe, bin, 0o755); err != nil {
+				return errors.New(T("fail.copy", err))
+			}
+		}
+		if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
+			return err
+		}
+		if err := writeFileAtomic(unit, []byte(unitText), 0o644); err != nil {
+			return errors.New(T("fail.unit", err))
+		}
+		stepOK(T("step.installed"), binDest)
+		if hf := filepath.Join(*prefix, defaultHostsFile); !exists(hf) {
+			os.MkdirAll(filepath.Dir(hf), 0o755)
+			os.WriteFile(hf, []byte(hostsTpl), 0o644)
+		}
+		if !service {
+			return nil
+		}
+		return activate(ready)
+	}()
+	if err != nil {
+		fail(T("upd.failed", err) + " " + rollBack(was, service, ready))
 	}
-	stepOK(T("step.installed"), binDest)
-	if hf := filepath.Join(*prefix, defaultHostsFile); !exists(hf) {
-		os.MkdirAll(filepath.Dir(hf), 0o755)
-		os.WriteFile(hf, []byte(hostsTpl), 0o644)
+	if err := keepPrevious(was); err != nil {
+		fmt.Fprintln(os.Stderr, "  ! "+err.Error())
 	}
-	if *noSys {
+	if !service {
 		return
-	}
-	if err := systemctl("daemon-reload"); err != nil {
-		fail(T("fail.reload"))
-	}
-	quiet := func(args ...string) error {
-		c := exec.Command("systemctl", args...)
-		c.Stderr = os.Stderr
-		return c.Run()
-	}
-	if err := quiet("enable", "fragma"); err != nil {
-		fail(T("fail.enable"))
-	}
-	stepOK(T("step.service"), T("d.enabled"))
-	if err := quiet("restart", "fragma"); err != nil { // restart: an upgrade must run the new binary
-		fail(T("fail.start"))
-	}
-	time.Sleep(time.Second)
-	if !active() {
-		fail(T("fail.stayup"))
 	}
 	stepOK(T("step.running"), T("d.running"))
 	fmt.Println()
@@ -154,6 +164,7 @@ func runInstall(args []string) {
 		cmd("sudo fragma start", T("box.start")),
 		cmd("fragma status", T("box.status")),
 		cmd("sudo fragma add <site>", T("box.add")),
+		cmd("fragma report", T("box.report")),
 		cmd("sudo fragma uninstall", T("box.uninstall")),
 		"",
 	}, cGreen))
@@ -172,7 +183,9 @@ func runUninstall(args []string) {
 		systemctl("disable", "--now", "fragma")
 	}
 	os.Remove(filepath.Join(*prefix, unitDest))
-	os.Remove(filepath.Join(*prefix, binDest))
+	for _, suffix := range []string{"", keptSuffix, rollbackSuffix} {
+		os.Remove(filepath.Join(*prefix, binDest) + suffix)
+	}
 	if !*noSys {
 		systemctl("daemon-reload")
 		removeRules() // in case the service was already gone

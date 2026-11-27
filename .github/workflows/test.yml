@@ -2,34 +2,112 @@ name: test
 
 on:
   push:
+    branches: ["**"] # tags are tested by the release workflow, which calls this one
   pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# a newer push to the same branch makes the older run pointless
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   unit:
     name: unit tests (${{ matrix.os }})
+    # pull requests from this repository are already tested by their push
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
       - run: go vet ./...
       - run: go test -count=1 ./...
+      # The next steps change the proxy settings and the hosts file of the runner,
+      # which is thrown away afterwards. Still, both are saved first and put back
+      # by a step that runs however the tests end.
+      - name: Save the runner's proxy settings and hosts file
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          reg export "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" "$env:RUNNER_TEMP\inet.reg" /y
+          Copy-Item "$env:SystemRoot\System32\drivers\etc\hosts" "$env:RUNNER_TEMP\hosts.saved"
+          (Get-Acl "$env:SystemRoot\System32\drivers\etc\hosts").Sddl | Set-Content "$env:RUNNER_TEMP\hosts.sddl"
+
+      - name: Windows recovery, against the real settings
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          go build -o fragma.exe .
+          go build -ldflags "-X main.buildFault=yes" -o broken.exe .
+          export FRAGMA_WIN_INTEGRATION=1 FRAGMA_BIN="$(cygpath -w "$PWD/fragma.exe")" FRAGMA_BROKEN_BIN="$(cygpath -w "$PWD/broken.exe")"
+          go test -count=1 -timeout 5m -run Integration -v . 2>&1 | tee integration.log
+          # a test that was skipped proves nothing
+          if grep -q -e '--- SKIP' integration.log; then echo "::error::an integration test was skipped"; exit 1; fi
+          for t in GuardRestoresAfterKill RestoreAfterBothDie DamagedState ReplaceKeepsPermissions \
+                   PresetProxyComesBack LaterChangeSurvives ProxyInUseIsLeftAlone RealHostsFile MissingRegistryKey Update Report; do
+              grep -q -e "--- PASS: TestIntegration$t " integration.log || { echo "::error::$t did not pass"; exit 1; }
+          done
+
+      - name: Put the runner back, and check
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $hosts = "$env:SystemRoot\System32\drivers\etc\hosts"
+          Get-Process fragma -ErrorAction SilentlyContinue | Stop-Process -Force
+          $left = (Get-FileHash $hosts).Hash -ne (Get-FileHash "$env:RUNNER_TEMP\hosts.saved").Hash
+          if ($left) { Copy-Item "$env:RUNNER_TEMP\hosts.saved" $hosts -Force }
+          reg import "$env:RUNNER_TEMP\inet.reg"
+          $want = Get-Content "$env:RUNNER_TEMP\hosts.sddl"
+          $have = (Get-Acl $hosts).Sddl
+          if ($left) { Write-Output "::error::the tests left the hosts file changed (put back now)"; exit 1 }
+          if ($have -ne $want) { Write-Output "::error::the tests left the hosts permissions changed: $have instead of $want"; exit 1 }
+          Write-Output "hosts file as before: $((Get-FileHash $hosts).Hash) $have"
 
   e2e:
     name: system-wide mode, end to end (Linux)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          cache: false
       # Ubuntu 24.04 blocks unprivileged user namespaces; the test needs one
       # (it never touches the runner's real network).
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: sudo apt-get update && sudo apt-get install -y nftables iproute2
       - run: make e2e
+      - name: Install and update, with stand-ins
+        run: scripts/test/update.sh && scripts/test/install.sh
+
+  systemd:
+    name: install and update on a real systemd (Linux)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: sudo apt-get update && sudo apt-get install -y nftables
+      # installs fragma on the runner, which is thrown away afterwards
+      - run: scripts/test/systemd.sh
+

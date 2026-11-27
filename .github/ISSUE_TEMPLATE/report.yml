@@ -1,0 +1,36 @@
+name: Report / Bildirim (works or not / çalışıyor ya da çalışmıyor)
+description: Tell us how fragma behaves on your connection. / fragma'nın bağlantında nasıl davrandığını yaz.
+title: "report: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is public. Do not add your IP address, your name or anything you would rather keep private.
+        Bu kayıt herkese açık. IP adresini, adını veya gizli kalmasını istediğin bir şeyi yazma.
+  - type: dropdown
+    id: result
+    attributes:
+      label: Does it work? / Çalışıyor mu?
+      options:
+        - Works / Çalışıyor
+        - Works partly / Kısmen çalışıyor
+        - Does not work / Çalışmıyor
+        - Broke something else / Başka bir şeyi bozdu
+    validations:
+      required: true
+  - type: input
+    id: isp
+    attributes:
+      label: Country and internet provider (optional) / Ülke ve internet sağlayıcısı (isteğe bağlı)
+      placeholder: Türkiye, ...
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened? / Ne oldu?
+      description: Which site or app, what you saw, what you expected. / Hangi site veya uygulama, ne gördün, ne bekliyordun.
+  - type: textarea
+    id: report
+    attributes:
+      label: Output of `fragma report` / `fragma report` çıktısı
+      description: Read it before you paste it. / Yapıştırmadan önce oku.
+      render: text

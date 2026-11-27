@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,20 +31,24 @@ func runApps(args []string) {
 	if err != nil {
 		fail(err.Error())
 	}
-	// compare the whole content: a newer version may know more names
 	want := editHosts(string(b), on)
 	if args[0] != "status" && want != string(b) {
-		err = os.WriteFile(path, []byte(want), 0o644)
-		if os.IsPermission(err) {
+		_, err = updateHosts(path, on)
+		if errors.Is(err, fs.ErrPermission) {
 			quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 			ps := fmt.Sprintf("Start-Process -FilePath %s -ArgumentList 'apps','%s' -Verb RunAs -Wait -WindowStyle Hidden", quote(self()), args[0])
 			err = exec.Command("powershell", "-NoProfile", "-Command", ps).Run()
 		}
 		now, readErr := os.ReadFile(path)
 		if err != nil || readErr != nil || string(now) != want {
-			fail(T("win.appsfail"))
+			msg := T("win.appsfail")
+			if err != nil {
+				msg += ": " + err.Error()
+			}
+			fail(msg)
 		}
 		exec.Command("ipconfig", "/flushdns").Run()
+		fmt.Println("  " + T("win.appsbackup", path+hostsBackup))
 	}
 	if appsEnabled() {
 		fmt.Println("  " + T("win.appson"))

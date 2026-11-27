@@ -1,0 +1,645 @@
+//go:build windows
+
+package main
+
+// Changes the real proxy settings of the machine, so it only runs when asked for,
+// on a throw-away machine such as a CI runner:
+//
+//	go build -o fragma.exe . && FRAGMA_WIN_INTEGRATION=1 FRAGMA_BIN=...\fragma.exe go test -run Integration -v .
+
+import (
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+const testAddr = "127.0.0.1:18899"
+
+func integration(t *testing.T) (bin string, original proxyConfig, state string) {
+	bin = os.Getenv("FRAGMA_BIN")
+	if os.Getenv("FRAGMA_WIN_INTEGRATION") == "" || bin == "" {
+		t.Skip("changes the system settings: set FRAGMA_WIN_INTEGRATION and FRAGMA_BIN")
+	}
+	original, err := (winProxy{}).get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "local"))
+	t.Setenv("APPDATA", filepath.Join(dir, "roaming"))
+	t.Setenv("FRAGMA_NO_DIALOG", "1")
+	t.Cleanup(func() {
+		killAll(t, "")
+		(winProxy{}).set(original)
+		reg("delete", runOnceKey, "/v", "fragma-restore", "/f")
+	})
+	return bin, original, filepath.Join(dir, "local", "fragma", "proxy.json")
+}
+
+// killAll ends fragma processes the hard way; with a word, only those whose command line has it.
+func killAll(t *testing.T, word string) {
+	script := `Get-CimInstance Win32_Process -Filter "Name='fragma.exe'" | Where-Object { $_.CommandLine -like '*` + word + `*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`
+	if out, err := exec.Command("powershell", "-NoProfile", "-Command", script).CombinedOutput(); err != nil {
+		t.Log("stopping processes:", err, string(out))
+	}
+}
+
+func waitFor(t *testing.T, what string, ok func(proxyConfig) bool) proxyConfig {
+	var c proxyConfig
+	var err error
+	for end := time.Now().Add(20 * time.Second); time.Now().Before(end); time.Sleep(200 * time.Millisecond) {
+		if c, err = (winProxy{}).get(); err == nil && ok(c) {
+			return c
+		}
+	}
+	t.Fatalf("%s: settings are %+v (%v)", what, c, err)
+	return c
+}
+
+func startRun(t *testing.T, bin string) *exec.Cmd {
+	cmd := exec.Command(bin, "run", "--port", "18899")
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go cmd.Wait()
+	waitFor(t, "fragma sets its proxy", func(c proxyConfig) bool { return c.Server == testAddr })
+	// the guard starts right after the settings change
+	time.Sleep(2 * time.Second)
+	return cmd
+}
+
+// The program is killed; its guard puts the settings back.
+func TestIntegrationGuardRestoresAfterKill(t *testing.T) {
+	bin, original, state := integration(t)
+	cmd := startRun(t, bin)
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the guard restores", func(c proxyConfig) bool { return c == original })
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Error("state file left behind:", err)
+	}
+}
+
+// Program and guard both die, as in a power cut; `restore` (run at sign-in) repairs it.
+func TestIntegrationRestoreAfterBothDie(t *testing.T) {
+	bin, original, _ := integration(t)
+	cmd := startRun(t, bin)
+	killAll(t, " guard ")
+	cmd.Process.Kill()
+	time.Sleep(2 * time.Second)
+	if c, _ := (winProxy{}).get(); c.Server != testAddr {
+		t.Fatalf("nothing should have restored yet: %+v", c)
+	}
+	out, err := exec.Command("reg", "query", runOnceKey, "/v", "fragma-restore").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "restore") {
+		t.Fatal("no sign-in recovery entry:", err, string(out))
+	}
+	if out, err := exec.Command(bin, "restore").CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	if c, _ := (winProxy{}).get(); c != original {
+		t.Fatalf("restored %+v, want %+v", c, original)
+	}
+}
+
+// The same with the saved settings destroyed: the proxy must still be turned off.
+func TestIntegrationDamagedState(t *testing.T) {
+	bin, _, state := integration(t)
+	cmd := startRun(t, bin)
+	killAll(t, " guard ")
+	cmd.Process.Kill()
+	time.Sleep(2 * time.Second)
+	for _, p := range []string{state, state + ".bak"} {
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if out, err := exec.Command(bin, "restore").CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	c, _ := (winProxy{}).get()
+	if c.Flags&flagProxy != 0 || c.Server != "" {
+		t.Fatalf("the proxy must be off: %+v", c)
+	}
+}
+
+// Replacing a file the way the hosts file is replaced keeps owner, group, access
+// list and attributes, also when the owner is not who replaces it.
+func TestIntegrationReplaceKeepsPermissions(t *testing.T) {
+	if os.Getenv("FRAGMA_WIN_INTEGRATION") == "" {
+		t.Skip("set FRAGMA_WIN_INTEGRATION")
+	}
+	for name, setup := range map[string][]string{
+		"inherited only":      nil,
+		"an entry of its own": {"/grant", "*S-1-5-32-545:(R)"},
+		"owned by SYSTEM":     {"/setowner", "*S-1-5-18"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "hosts")
+			if err := os.WriteFile(path, []byte("10.0.0.1 mine.test\r\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if setup != nil {
+				if out, err := exec.Command("icacls", append([]string{path}, setup...)...).CombinedOutput(); err != nil {
+					t.Fatal(err, string(out))
+				}
+			}
+			before := permissions(t, path)
+			for _, on := range []bool{true, false} {
+				if _, err := updateHosts(path, on); err != nil {
+					t.Fatal(err)
+				}
+				if after := permissions(t, path); after != before {
+					t.Fatalf("permissions changed:\n%s\nto\n%s", before, after)
+				}
+			}
+			if b, _ := os.ReadFile(path); string(b) != "10.0.0.1 mine.test\r\n" {
+				t.Fatalf("content = %q", b)
+			}
+		})
+	}
+}
+
+// The tests below prepare settings of their own, so they insist on GitHub's
+// throw-away runners and cannot be switched on by accident on a person's machine.
+func throwawayRunner(t *testing.T) {
+	if os.Getenv("FRAGMA_WIN_INTEGRATION") == "" || os.Getenv("GITHUB_ACTIONS") != "true" {
+		t.Skip("only on a GitHub Actions runner")
+	}
+}
+
+// regLine is a value of the Internet Settings key as reg prints it, or "absent".
+func regLine(name string) string {
+	out, err := exec.Command("reg", "query", inetKey, "/v", name).Output()
+	if err != nil {
+		return "absent"
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		if f := strings.Fields(l); len(f) >= 2 && f[0] == name {
+			return strings.Join(f[1:], " ")
+		}
+	}
+	return "absent"
+}
+
+const marker = "FragmaTestMarker"
+
+// proxyValues is what must come back: the settings as the system reports them and
+// the registry values programs read, with one value fragma has no business with.
+func proxyValues(t *testing.T) map[string]string {
+	c, err := (winProxy{}).get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]string{"flags": fmt.Sprint(c.Flags), "server": c.Server, "bypass": c.Bypass, "pac": c.PAC}
+	for _, n := range []string{"ProxyEnable", "ProxyServer", "ProxyOverride", "AutoConfigURL", marker} {
+		m["reg "+n] = regLine(n)
+	}
+	return m
+}
+
+func sameValues(t *testing.T, when string, want, got map[string]string) {
+	t.Helper()
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: %s is %q, want %q", when, k, got[k], v)
+		}
+	}
+}
+
+// preset writes proxy settings a person might have before fragma comes.
+func preset(t *testing.T, c proxyConfig) map[string]string {
+	if err := (winProxy{}).set(c); err != nil {
+		t.Fatal(err)
+	}
+	if err := regSet(inetKey, marker, "untouched"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { reg("delete", inetKey, "/v", marker, "/f") })
+	got := proxyValues(t)
+	if got["server"] != c.Server || got["bypass"] != c.Bypass || got["reg ProxyServer"] != "REG_SZ "+c.Server {
+		t.Fatalf("the settings to start from were not taken over: %v", got)
+	}
+	t.Logf("settings before fragma: %v", got)
+	return got
+}
+
+// A proxy address, port and exception list that are there but switched off come
+// back exactly, whether fragma is stopped normally or killed.
+func TestIntegrationPresetProxyComesBack(t *testing.T) {
+	throwawayRunner(t)
+	for _, end := range []string{"stop", "kill, then the guard", "kill both, then restore"} {
+		t.Run(end, func(t *testing.T) {
+			bin, _, state := integration(t)
+			before := preset(t, proxyConfig{Flags: flagDirect, Server: "proxy.example.test:3128", Bypass: "*.example.test;10.1.2.3;<local>"})
+			cmd := startRun(t, bin)
+			during := proxyValues(t)
+			t.Logf("settings while fragma runs: %v", during)
+			if during["server"] != testAddr || !strings.HasPrefix(during["bypass"], "*.example.test;10.1.2.3;<local>;") || during["reg "+marker] != before["reg "+marker] {
+				t.Fatalf("fragma must set its proxy and keep the exceptions: %v", during)
+			}
+			switch end {
+			case "stop":
+				if out, err := exec.Command(bin, "stop").CombinedOutput(); err != nil {
+					t.Fatal(err, string(out))
+				}
+			case "kill, then the guard":
+				if err := cmd.Process.Kill(); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "the guard restores", func(c proxyConfig) bool { return c.Server != testAddr })
+				time.Sleep(time.Second)
+			default:
+				killAll(t, " guard ")
+				cmd.Process.Kill()
+				time.Sleep(2 * time.Second)
+				if c, _ := (winProxy{}).get(); c.Server != testAddr {
+					t.Fatalf("nothing should have restored yet: %+v", c)
+				}
+				if out, err := exec.Command(bin, "restore").CombinedOutput(); err != nil {
+					t.Fatal(err, string(out))
+				}
+			}
+			after := proxyValues(t)
+			t.Logf("settings after fragma: %v", after)
+			sameValues(t, "after fragma", before, after)
+			if _, err := os.Stat(state); !os.IsNotExist(err) {
+				t.Error("state file left behind:", err)
+			}
+		})
+	}
+}
+
+// What the person changes while fragma runs stays; only fragma's part goes.
+func TestIntegrationLaterChangeSurvives(t *testing.T) {
+	throwawayRunner(t)
+	bin, _, _ := integration(t)
+	before := preset(t, proxyConfig{Flags: flagDirect, Server: "proxy.example.test:3128", Bypass: "*.example.test"})
+	startRun(t, bin)
+	c, err := (winProxy{}).get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Bypass, c.Reg = "added.example.test;"+c.Bypass, registryValues{}
+	if err := (winProxy{}).set(c); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(bin, "stop").CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	want := map[string]string{}
+	for k, v := range before {
+		want[k] = v
+	}
+	want["bypass"] = "added.example.test;*.example.test"
+	want["reg ProxyOverride"] = "REG_SZ added.example.test;*.example.test"
+	after := proxyValues(t)
+	t.Logf("settings after fragma: %v", after)
+	sameValues(t, "after fragma", want, after)
+}
+
+// A proxy or setup script that is in use is not touched at all.
+func TestIntegrationProxyInUseIsLeftAlone(t *testing.T) {
+	throwawayRunner(t)
+	for name, c := range map[string]proxyConfig{
+		"proxy":        {Flags: flagDirect | flagProxy, Server: "corp.example.test:8080", Bypass: "intranet.example.test"},
+		"setup script": {Flags: flagDirect | flagPAC, Server: "old.example.test:1", Bypass: "a.example.test", PAC: "http://pac.example.test/proxy.pac"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bin, _, state := integration(t)
+			before := preset(t, c)
+			cmd := exec.Command(bin, "run", "--port", "18899")
+			done := make(chan error, 1)
+			var out strings.Builder
+			cmd.Stdout, cmd.Stderr = &out, &out
+			if err := cmd.Start(); err != nil {
+				t.Fatal(err)
+			}
+			go func() { done <- cmd.Wait() }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("fragma must refuse to start:", out.String())
+				}
+			case <-time.After(15 * time.Second):
+				t.Fatal("fragma started over a proxy in use")
+			}
+			t.Log(strings.TrimSpace(out.String()))
+			sameValues(t, "after the refusal", before, proxyValues(t))
+			if _, err := os.Stat(state); !os.IsNotExist(err) {
+				t.Error("state file written:", err)
+			}
+			if reg("query", runOnceKey, "/v", "fragma-restore") == nil {
+				t.Error("a sign-in entry was left behind")
+			}
+		})
+	}
+}
+
+// permissions lists owner, access rules and attributes of a file.
+func permissions(t *testing.T, path string) string {
+	script := `$p='` + path + `'; (Get-Acl -LiteralPath $p).Sddl; (Get-Item -LiteralPath $p -Force).Attributes`
+	out, err := exec.Command("powershell", "-NoProfile", "-Command", script).CombinedOutput()
+	if err != nil {
+		t.Fatal(err, string(out))
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// `fragma apps on` and `off` on the real hosts file give it back byte for byte
+// with the same permissions.
+func TestIntegrationRealHostsFile(t *testing.T) {
+	throwawayRunner(t)
+	bin, _, _ := integration(t)
+	t.Setenv("FRAGMA_LANG", "en")
+	path := systemHosts()
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalPerms := permissions(t, path)
+	originalSecurity, err := fileSecurity(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup := path + hostsBackup
+	if _, err := os.Stat(backup); !os.IsNotExist(err) {
+		t.Fatal("a backup is already there:", err)
+	}
+	// registered before anything is changed, so it runs however the test ends
+	t.Cleanup(func() {
+		if err := os.WriteFile(path, original, 0o644); err != nil { // keeps the permissions
+			t.Error("CLEANUP could not restore the hosts file:", err)
+		}
+		os.Remove(backup)
+		exec.Command("ipconfig", "/flushdns").Run()
+		if now, err := os.ReadFile(path); err != nil || string(now) != string(original) {
+			t.Error("CLEANUP: the hosts file differs from the original", err)
+		}
+		if p := permissions(t, path); p != originalPerms {
+			if err := setSecurity(path, originalSecurity); err != nil {
+				t.Error("CLEANUP could not restore the permissions:", err)
+			}
+			if p := permissions(t, path); p != originalPerms {
+				t.Error("CLEANUP: permissions differ from the original:", p)
+			}
+		}
+	})
+	apps := func(arg string) {
+		t.Helper()
+		out, err := exec.Command(bin, "apps", arg).CombinedOutput()
+		t.Logf("fragma apps %s: %s", arg, strings.TrimSpace(string(out)))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	content := func() string {
+		t.Helper()
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	// the runner's own file, then one with a line of the person's and no final newline
+	for name, start := range map[string]string{
+		"as it is":             string(original),
+		"own line, no newline": string(original) + "\r\n10.9.8.7 mine.example.test",
+	} {
+		if err := os.WriteFile(path, []byte(start), 0o644); err != nil {
+			t.Fatal("administrator rights are needed:", err)
+		}
+		apps("on")
+		on := content()
+		if !strings.HasPrefix(on, start) || !strings.Contains(on, hostsBegin) || !strings.Contains(on, "127.0.0.1 updates.discord.com") {
+			t.Fatalf("%s: after on:\n%s", name, on)
+		}
+		if b, err := os.ReadFile(backup); err != nil || string(b) != start {
+			t.Fatalf("%s: the backup is not the content from before: %v %q", name, err, b)
+		}
+		if p := permissions(t, path); p != originalPerms {
+			t.Fatalf("%s: permissions after on:\n%s\nbefore:\n%s", name, p, originalPerms)
+		}
+		// the system really uses the entry
+		exec.Command("ipconfig", "/flushdns").Run()
+		ips, err := net.LookupIP("updates.discord.com")
+		if err != nil || len(ips) == 0 {
+			t.Fatal("lookup:", err)
+		}
+		for _, ip := range ips {
+			if !ip.IsLoopback() {
+				t.Fatalf("%s: updates.discord.com still leads to %v", name, ips)
+			}
+		}
+		apps("on") // a second time changes nothing
+		if content() != on {
+			t.Fatalf("%s: a second 'on' changed the file", name)
+		}
+		apps("off")
+		if got := content(); got != start {
+			t.Fatalf("%s: after off %q, want %q", name, got, start)
+		}
+		if p := permissions(t, path); p != originalPerms {
+			t.Fatalf("%s: permissions after off:\n%s\nbefore:\n%s", name, p, originalPerms)
+		}
+		t.Logf("%s: %d bytes back exactly, permissions unchanged: %s", name, len(start), originalPerms)
+	}
+}
+
+// An update to a version that does not start leaves the earlier one installed and
+// running; a good update keeps the one before.
+func TestIntegrationUpdate(t *testing.T) {
+	throwawayRunner(t)
+	good, original, _ := integration(t)
+	broken := os.Getenv("FRAGMA_BROKEN_BIN")
+	if broken == "" {
+		t.Fatal("FRAGMA_BROKEN_BIN is not set")
+	}
+	t.Setenv("FRAGMA_LANG", "en")
+	t.Logf("sign-in key at the start (nil: it exists): %v", reg("query", runKey))
+	if reg("query", runKey, "/v", "fragma") == nil {
+		t.Fatal("a fragma sign-in entry is already there")
+	}
+	dst := filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "fragma", "fragma.exe")
+	t.Cleanup(func() {
+		exec.Command(good, "uninstall").Run()
+		killAll(t, "")
+		reg("delete", runKey, "/v", "fragma", "/f")
+		time.Sleep(time.Second) // let the files be released
+	})
+	install := func(bin string, wantOK bool) string {
+		t.Helper()
+		out, err := exec.Command(bin, "install", "--port", "18899").CombinedOutput()
+		t.Logf("%s install: %s", filepath.Base(bin), strings.TrimSpace(string(out)))
+		if (err == nil) != wantOK {
+			t.Fatalf("success must be %v: %v", wantOK, err)
+		}
+		return string(out)
+	}
+	same := func(a, b string) bool {
+		x, err1 := os.ReadFile(a)
+		y, err2 := os.ReadFile(b)
+		return err1 == nil && err2 == nil && string(x) == string(y)
+	}
+	absent := func(what string) {
+		t.Helper()
+		if _, err := os.Stat(dst); !os.IsNotExist(err) {
+			t.Error(what, "left the program:", err)
+		}
+		if reg("query", runKey, "/v", "fragma") == nil {
+			t.Error(what, "left a sign-in entry")
+		}
+		if c, _ := (winProxy{}).get(); c != original {
+			t.Errorf("%s changed the proxy settings: %+v", what, c)
+		}
+	}
+
+	// it must fail for the right reason: the program that does not start
+	if out := install(broken, false); !strings.Contains(out, "did not work") || !strings.Contains(out, "does not start") {
+		t.Error("a broken version failed for another reason")
+	}
+	absent("a first install that does not start")
+
+	install(good, true)
+	waitFor(t, "the installed version runs", func(c proxyConfig) bool { return c.Server == testAddr })
+	auto := regValueOf(t, runKey, "fragma")
+	time.Sleep(2 * time.Second)
+
+	out := install(broken, false)
+	if !strings.Contains(out, "previous version is back and running") {
+		t.Error("the user must be told what happened")
+	}
+	if !same(dst, good) {
+		t.Error("the earlier program is not back")
+	}
+	if got := regValueOf(t, runKey, "fragma"); got != auto {
+		t.Errorf("sign-in entry %q, want %q", got, auto)
+	}
+	waitFor(t, "the earlier version runs again", func(c proxyConfig) bool { return c.Server == testAddr })
+	if !instanceRunning() {
+		t.Fatal("fragma is not running")
+	}
+	time.Sleep(2 * time.Second)
+
+	// a newer program: the same with a few bytes after its end
+	newer := filepath.Join(t.TempDir(), "newer.exe")
+	b, err := os.ReadFile(good)
+	if err == nil {
+		err = os.WriteFile(newer, append(b, "newer"...), 0o755)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	install(newer, true)
+	waitFor(t, "the new version runs", func(c proxyConfig) bool { return c.Server == testAddr })
+	if !same(dst, newer) || !same(dst+".old", good) {
+		t.Error("the new program must be installed and the earlier one kept")
+	}
+	time.Sleep(2 * time.Second)
+
+	if out, err := exec.Command(newer, "uninstall").CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	waitFor(t, "uninstall restores", func(c proxyConfig) bool { return c == original })
+	time.Sleep(2 * time.Second)
+	absent("uninstall")
+	if _, err := os.Stat(dst + ".old"); !os.IsNotExist(err) {
+		t.Error("the kept program was left behind:", err)
+	}
+}
+
+func regValueOf(t *testing.T, key, name string) string {
+	v, err := readRegString(key, name)
+	if err != nil || !v.Set {
+		t.Fatal("reading", name, err)
+	}
+	return v.Value
+}
+
+// A value of a key that does not exist is simply absent: a new account may have
+// no Run key.
+func TestIntegrationMissingRegistryKey(t *testing.T) {
+	if os.Getenv("FRAGMA_WIN_INTEGRATION") == "" {
+		t.Skip("set FRAGMA_WIN_INTEGRATION")
+	}
+	v, err := readRegString(`HKCU\Software\FragmaTestNoSuchKey`, "fragma")
+	if err != nil || v.Set {
+		t.Fatalf("value %+v, error %v", v, err)
+	}
+}
+
+// `fragma report` while fragma runs and after it stopped, on the real system:
+// the states are right and nothing of the account is in it.
+func TestIntegrationReport(t *testing.T) {
+	throwawayRunner(t)
+	bin, original, state := integration(t)
+	t.Setenv("FRAGMA_LANG", "en")
+	dir := filepath.Dir(filepath.Dir(state))
+	own := userFile("hosts.txt")
+	os.MkdirAll(filepath.Dir(own), 0o755)
+	if err := os.WriteFile(own, []byte("secret-site.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	produce := func(name string, args ...string) (Report, string) {
+		t.Helper()
+		path := filepath.Join(dir, name)
+		out, err := exec.Command(bin, append([]string{"report", "--output", path}, args...)...).Output()
+		if err != nil {
+			t.Fatal(err, string(out))
+		}
+		saved, err := os.ReadFile(path)
+		if err != nil || string(saved) != string(out) {
+			t.Fatal("shown and saved differ", err)
+		}
+		t.Logf("%s:\n%s", name, saved)
+		low := strings.ToLower(string(saved))
+		for _, secret := range []string{os.Getenv("USERNAME"), os.Getenv("COMPUTERNAME"), `c:\users`, "secret-site", "127.0.0.1", dir} {
+			if secret != "" && strings.Contains(low, strings.ToLower(secret)) {
+				t.Errorf("the report holds %q", secret)
+			}
+		}
+		var r Report
+		if err := json.Unmarshal(saved, &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.Windows == nil || r.Linux != nil || r.System.Name != "windows" || r.System.Version == "unknown" || *r.State.OwnSites != 1 {
+			t.Fatalf("report %+v", r)
+		}
+		return r, low
+	}
+	startRun(t, bin)
+	on, _ := produce("on.json")
+	if !*on.State.Running || on.Windows.SystemProxy != "fragma" || len(on.Sites) != len(reportHosts) {
+		t.Errorf("while running: %+v %+v", on.State, on.Windows)
+	}
+	// the test connections really go through fragma's proxy
+	for _, s := range on.Sites {
+		if s.Route != "fragma" || s.AsIs == nil {
+			t.Errorf("%s: not tested through the proxy: %+v", s.Host, s)
+		}
+		if s.Host == controlHost && s.AsIs != nil && s.AsIs.Answered == 0 {
+			t.Errorf("the control site did not answer through the proxy: %+v", s.AsIs)
+		}
+	}
+	if c, _ := (winProxy{}).get(); c.Server != testAddr {
+		t.Error("a report must change nothing")
+	}
+	if out, err := exec.Command(bin, "stop").CombinedOutput(); err != nil {
+		t.Fatal(err, string(out))
+	}
+	off, _ := produce("off.json", "--no-net")
+	if *off.State.Running || off.Windows.SystemProxy != "none" || off.Windows.RestorePending || off.SitesTested {
+		t.Errorf("after stop: %+v %+v", off.State, off.Windows)
+	}
+	if c, _ := (winProxy{}).get(); c != original {
+		t.Errorf("settings differ: %+v", c)
+	}
+}

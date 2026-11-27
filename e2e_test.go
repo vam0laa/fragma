@@ -12,7 +12,9 @@ package main
 // the real fragma binary runs between them and the client.
 
 import (
+	"bytes"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -85,6 +87,33 @@ func askDNS(t *testing.T, addr string) string {
 
 func tableExists() bool { return exec.Command("nft", "list", "table", "ip", "fragma").Run() == nil }
 
+var daemonPid int
+
+// openFiles counts what the running daemon holds open.
+func openFiles(t *testing.T) int {
+	t.Helper()
+	f, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", daemonPid))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(f)
+}
+
+// dohName answers an A query for doh.test with 203.0.113.9; nil for any other query.
+func dohName(q []byte) []byte {
+	name := []byte("\x03doh\x04test\x00")
+	if len(q) < 12+len(name)+4 || !bytes.Equal(q[12:12+len(name)], name) {
+		return nil
+	}
+	end := 12 + len(name) + 4
+	r := append([]byte{q[0], q[1], 0x81, 0x80, 0, 1, 0, 0, 0, 0, 0, 0}, q[12:end]...)
+	if q[end-3] == 1 { // type A
+		r[7] = 1
+		r = append(r, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 203, 0, 113, 9)
+	}
+	return r
+}
+
 // startDaemon runs the real binary and returns a function that stops it and
 // checks that the rules are gone.
 func startDaemon(t *testing.T, bin string, args ...string) (stop func()) {
@@ -97,6 +126,7 @@ func startDaemon(t *testing.T, bin string, args ...string) (stop func()) {
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	t.Cleanup(func() { cmd.Process.Kill() })
+	daemonPid = cmd.Process.Pid
 	for i := 0; i < 50 && !tableExists(); i++ {
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -144,9 +174,13 @@ func TestSandbox(t *testing.T) {
 	go func() { // the ISP resolver: always lies
 		buf := make([]byte, 512)
 		for {
-			_, a, err := isp.ReadFrom(buf)
+			n, a, err := isp.ReadFrom(buf)
 			if err != nil {
 				return
+			}
+			if r := dohName(buf[:n]); r != nil { // the truth about one name
+				isp.WriteTo(r, a)
+				continue
 			}
 			isp.WriteTo([]byte("ISP-LIES-0123456"), a)
 		}
@@ -216,6 +250,22 @@ func TestSandbox(t *testing.T) {
 	if n := dohHits.Load(); n != 0 {
 		t.Fatalf("by default nothing may be sent to a DNS-over-HTTPS server, got %d requests", n)
 	}
+	// 7. a connection made straight to fragma's own port is dropped, not relayed
+	//    back to itself over and over
+	before := openFiles(t)
+	self, err := net.Dial("tcp", "127.0.0.1:18443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := openFiles(t); n > before+3 {
+		t.Errorf("a direct connection to fragma's port: open files went from %d to %d", before, n)
+	}
+	self.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := self.Read(make([]byte, 1)); err != io.EOF {
+		t.Errorf("a direct connection to fragma's port must be closed, got %v", err)
+	}
+	self.Close()
 	stop()
 	site.reset()
 	dialTLS(t, "203.0.113.5:443", "blocked.test")
@@ -231,5 +281,68 @@ func TestSandbox(t *testing.T) {
 	stop()
 	if got := askDNS(t, "203.0.113.53:53"); got != "ISP-LIES-0123456" {
 		t.Fatalf("after stop the ISP answers again, got %q", got)
+	}
+
+	// ---- phase C: a DNS-over-HTTPS server given by name ----
+	// The system's resolver (see Makefile) is the ISP's. fragma's own lookup of
+	// the name must not be redirected back to fragma.
+	named := httptest.NewUnstartedServer(doh.Config.Handler)
+	named.Listener.Close()
+	if named.Listener, err = net.Listen("tcp", "203.0.113.9:19999"); err != nil {
+		t.Fatal(err)
+	}
+	named.Start()
+	defer named.Close()
+	stop = startDaemon(t, bin, "--hosts", hostsFile, "--state", stateDir, "--dns", "--doh", "http://doh.test:19999/dns-query")
+	if got := askDNS(t, "203.0.113.53:53"); got != "0123456789ab-queryR" {
+		t.Fatalf("with a DoH server given by name the lookup must go over it, got %q", got)
+	}
+	stop()
+
+	// ---- phase D: the same behind a local stub resolver (like systemd-resolved) ----
+	// What the stub sends on is redirected to fragma like any other DNS.
+	stub, err := net.ListenPacket("udp", "127.0.0.53:53")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stub.Close()
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := stub.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			go func(q []byte) {
+				up, err := net.Dial("udp", "203.0.113.53:53")
+				if err != nil {
+					return
+				}
+				defer up.Close()
+				up.Write(q)
+				up.SetReadDeadline(time.Now().Add(2 * time.Second))
+				a := make([]byte, 1500)
+				if n, err := up.Read(a); err == nil {
+					stub.WriteTo(a[:n], from)
+				}
+			}(append([]byte(nil), buf[:n]...))
+		}
+	}()
+	if err := os.WriteFile("/etc/resolv.conf", []byte("nameserver 127.0.0.53\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stop = startDaemon(t, bin, "--hosts", hostsFile, "--state", stateDir, "--dns", "--doh", "http://doh.test:19999/dns-query")
+	for i := 0; i < 3; i++ {
+		if got := askDNS(t, "203.0.113.53:53"); got != "0123456789ab-queryR" {
+			t.Fatalf("behind a stub resolver the lookup must go over DoH, got %q", got)
+		}
+	}
+	stop()
+
+	// ---- phase E: a server name that cannot be looked up leaves DNS alone ----
+	cmd := exec.Command(bin, "run", "--hosts", hostsFile, "--state", stateDir, "--dns", "--doh", "http://no-such-name.test/dns-query")
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "no-such-name.test") || tableExists() {
+		t.Fatalf("fragma must refuse to start and set no rules: %v %s", err, out)
 	}
 }
