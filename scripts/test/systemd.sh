@@ -91,6 +91,7 @@ check "no rules" not rules
 check "the web still works" web
 
 echo "fragma report, with the installed service running"
+check "installs again (the section before left nothing)" install_with "$t/good" yes
 check "as a user" sh -c "'$t/good' report --output '$t/user.json' > /dev/null"
 check "  running, installed, same version" jq -e '.state.running and .state.installed and .linux.service_enabled and .windows == null' "$t/user.json"
 check "  no failed check" jq -e '.failed_checks == []' "$t/user.json"
