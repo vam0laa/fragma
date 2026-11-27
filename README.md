@@ -1,16 +1,33 @@
 # fragma
 
 **Open the sites your ISP blocks (Discord, Roblox, ...) with one command, and leave everything
-else exactly as it is.** No VPN, no account, no telemetry. A [zapret](https://github.com/bol-van/zapret) /
-GoodbyeDPI alternative, written in Go. **Linux** (system-wide) and **Windows** (experimental, via the system proxy).
+else exactly as it is.**
+
+[![test](https://github.com/vam0laa/fragma/actions/workflows/test.yml/badge.svg)](https://github.com/vam0laa/fragma/actions/workflows/test.yml)
+[![release](https://img.shields.io/github/v/release/vam0laa/fragma)](https://github.com/vam0laa/fragma/releases/latest)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+No VPN, no account, no telemetry. A [zapret](https://github.com/bol-van/zapret) / GoodbyeDPI
+alternative, written in Go. **Linux** (system-wide) and **Windows** (experimental, via the system proxy).
+
+[Install](#install) · [How it works](#how-it-works) · [Commands](#commands) ·
+[Windows](#windows-experimental) · [Privacy](#privacy) · [Limitations](#limitations-please-read) ·
+[Türkçe](#türkçe)
+
+<p align="center">
+  <img src="docs/how-it-works.svg" width="860" alt="Without fragma the blocking box reads the site name and cuts the connection. With fragma the first message is split into two TLS records: the box cannot read the name, the server puts it back together.">
+</p>
+
+## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vam0laa/fragma/main/install.sh | sudo sh
 ```
 
-That downloads the latest release, verifies its checksum, installs it and starts it. It also
-starts at every boot. The installer and all commands speak **English or Türkçe**, chosen from your
-system language (force one with `FRAGMA_LANG=tr` or `FRAGMA_LANG=en`). To turn it off:
+This is for Linux; for Windows see [below](#windows-experimental). The command downloads the latest release, verifies its checksum, installs it and starts it. It also
+starts at every boot. There is nothing to configure. The installer and all commands speak
+**English or Türkçe**, chosen from your system language (force one with `FRAGMA_LANG=tr` or
+`FRAGMA_LANG=en`). To turn it off:
 
 ```bash
 sudo fragma stop        # off, nothing is redirected anymore
@@ -18,6 +35,55 @@ sudo fragma start       # on again
 fragma status           # is it on?
 sudo fragma uninstall   # remove everything
 ```
+
+## What you see
+
+<p align="center">
+  <img src="docs/terminal.svg" width="680" alt="Terminal: fragma status says fragma is ON; fragma list shows the built-in Discord and Roblox domains, your own sites and the learned ones.">
+</p>
+
+## Why fragma
+
+- **Plug and run.** One command; Discord and Roblox are known out of the box, other blocked sites
+  are found by themselves.
+- **Surgical.** Only connections to blocked sites are changed. Everything else passes byte for byte.
+- **Your traffic stays yours.** It is not sent through anyone's server, and DNS is left alone unless
+  you ask.
+- **Small enough to read.** Go, standard library only, with unit and end-to-end tests.
+
+## Türkçe
+
+<details>
+<summary><b>Kısa Türkçe anlatım</b></summary>
+
+<br>
+
+**fragma, internet sağlayıcının engellediği siteleri (Discord, Roblox ...) tek komutla açar; diğer
+her şeye dokunmaz.** VPN yok, hesap yok, telemetri yok.
+
+**Nasıl çalışır?** Sağlayıcıdaki engel kutusu, bağlantının ilk mesajındaki site adını okuyup
+bağlantıyı keser. fragma bu mesajı site adının ortasından iki geçerli parçaya böler: sunucu
+parçaları birleştirir, engel kutusu adı göremez.
+
+**Kurulum (Linux)**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vam0laa/fragma/main/install.sh | sudo sh
+```
+
+| Komut | Ne yapar |
+|---|---|
+| `fragma status` | açık mı? |
+| `sudo fragma stop` / `start` | kapat / tekrar aç |
+| `sudo fragma add <site>` | bu siteyi de engelli say |
+| `sudo fragma uninstall` | her şeyi kaldır |
+
+**Bilmen gerekenler:** Yalnızca HTTPS (TCP) ve IPv4; Discord sesli görüşme gibi UDP trafiğine
+dokunmaz. Site adına bakan engellere karşı çalışır, IP engellerine karşı çalışmaz. Windows sürümü (arka planda,
+sistem proxy'si üzerinden çalışır) deneyseldir. Aracı bulunduğun yerin yasalarına uygun
+kullanmak senin sorumluluğundadır.
+
+</details>
 
 ## It only touches blocked sites
 
@@ -52,7 +118,7 @@ fragma is built so that nothing about you has to leave your machine:
 - The only other network use is yours to trigger: the installer downloads from github.com (GitHub
   sees your IP like for any download, the checksum is verified), and `fragma probe` /
   `fragma experiment` contact a few public hosts and one DoH resolver to run their tests.
-- It is under 2,000 lines of Go and uses only the standard library. Read it.
+- It is a few thousand lines of Go and uses only the standard library. Read it.
 
 ## Does it work?
 
@@ -158,7 +224,7 @@ Both get around SNI-based blocks, in different ways. Neither is "better": they s
 | Setup | Pick a strategy, edit a config | None for the typical case |
 | Only blocked sites | Yes, with host lists / auto host list | Yes, by default |
 | Overhead | Typically only the first packets of a connection | Every HTTPS (port 443) connection is relayed by fragma |
-| Size | C, large feature set | Go, under 2,000 lines, standard library only |
+| Size | C, large feature set | Go, a few thousand lines, standard library only |
 
 **Choose fragma** for a desktop Linux machine, an SNI-based block (Discord, Roblox, ...) and a simple,
 no-configuration tool. **Choose Zapret** for UDP/QUIC blocks, routers, BSD/macOS, difficult ISPs, or when you want

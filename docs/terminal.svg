@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="559" viewBox="0 0 760 559" role="img" aria-label="fragma status and fragma list in a terminal">
+<rect width="760" height="559" rx="12" fill="#0d1117"/><rect x=".5" y=".5" width="759" height="558" rx="11.5" fill="none" stroke="#30363d"/>
+<circle cx="24" cy="22" r="6" fill="#ff5f57"/><circle cx="44" cy="22" r="6" fill="#febc2e"/><circle cx="64" cy="22" r="6" fill="#28c840"/>
+<line x1="0" y1="42" x2="760" y2="42" stroke="#30363d"/>
+<g font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,'DejaVu Sans Mono',monospace" font-size="14">
+<text x="22" y="66" xml:space="preserve"><tspan fill="#6cb6ff">$ </tspan><tspan fill="#e6edf3">fragma status</tspan></text>
+<text x="22" y="87" xml:space="preserve"><tspan fill="#c9d1d9">  </tspan><tspan fill="#87d787">●</tspan><tspan fill="#c9d1d9"> fragma is </tspan><tspan fill="#87d787" font-weight="bold">ON</tspan><tspan fill="#c9d1d9">  </tspan><tspan fill="#808b96">(stop with: sudo fragma stop)</tspan></text>
+<text x="22" y="129" xml:space="preserve"><tspan fill="#6cb6ff">$ </tspan><tspan fill="#e6edf3">fragma list</tspan></text>
+<text x="22" y="171" xml:space="preserve"><tspan fill="#c9d1d9">  </tspan><tspan fill="#f0f6fc" font-weight="bold">Built in</tspan><tspan fill="#c9d1d9">  </tspan><tspan fill="#808b96">always</tspan></text>
+<text x="22" y="192" xml:space="preserve"><tspan fill="#c9d1d9">    discord.com</tspan></text>
+<text x="22" y="213" xml:space="preserve"><tspan fill="#c9d1d9">    discord.gg</tspan></text>
+<text x="22" y="234" xml:space="preserve"><tspan fill="#c9d1d9">    discord.media</tspan></text>
+<text x="22" y="255" xml:space="preserve"><tspan fill="#c9d1d9">    discordapp.com</tspan></text>
+<text x="22" y="276" xml:space="preserve"><tspan fill="#c9d1d9">    discordapp.net</tspan></text>
+<text x="22" y="297" xml:space="preserve"><tspan fill="#c9d1d9">    discordcdn.com</tspan></text>
+<text x="22" y="318" xml:space="preserve"><tspan fill="#c9d1d9">    rbxcdn.com</tspan></text>
+<text x="22" y="339" xml:space="preserve"><tspan fill="#c9d1d9">    roblox.com</tspan></text>
+<text x="22" y="360" xml:space="preserve"><tspan fill="#c9d1d9">    robloxlabs.com</tspan></text>
+<text x="22" y="402" xml:space="preserve"><tspan fill="#c9d1d9">  </tspan><tspan fill="#f0f6fc" font-weight="bold">Yours</tspan><tspan fill="#c9d1d9">  </tspan><tspan fill="#808b96">/etc/fragma/hosts.txt</tspan></text>
+<text x="22" y="423" xml:space="preserve"><tspan fill="#c9d1d9">    </tspan><tspan fill="#808b96">(none)</tspan></text>
+<text x="22" y="465" xml:space="preserve"><tspan fill="#c9d1d9">  </tspan><tspan fill="#f0f6fc" font-weight="bold">Learned</tspan><tspan fill="#c9d1d9">  </tspan><tspan fill="#808b96">found blocked by fragma itself</tspan></text>
+<text x="22" y="486" xml:space="preserve"><tspan fill="#c9d1d9">    </tspan><tspan fill="#808b96">(none)</tspan></text>
+<text x="22" y="528" xml:space="preserve"><tspan fill="#c9d1d9">  </tspan><tspan fill="#808b96">Every other site is passed through unchanged.</tspan></text>
+</g></svg>
