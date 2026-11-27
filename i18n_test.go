@@ -31,6 +31,8 @@ func TestCatalogsMatch(t *testing.T) {
 }
 
 func TestDetectLang(t *testing.T) {
+	defer func(old func() string) { systemLocale = old }(systemLocale)
+	systemLocale = func() string { return "en" }
 	cases := []struct {
 		env  map[string]string
 		want string
@@ -53,6 +55,13 @@ func TestDetectLang(t *testing.T) {
 		if got := detectLang(); got != c.want {
 			t.Errorf("%v -> %q, want %q", c.env, got, c.want)
 		}
+	}
+	for _, k := range []string{"FRAGMA_LANG", "LC_ALL", "LC_MESSAGES", "LANG"} {
+		t.Setenv(k, "")
+	}
+	systemLocale = func() string { return "tr" }
+	if got := detectLang(); got != "tr" {
+		t.Errorf("system language must be used when no variable is set, got %q", got)
 	}
 }
 

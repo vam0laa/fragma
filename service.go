@@ -210,6 +210,8 @@ func runStatus() {
 
 func exists(p string) bool { _, err := os.Stat(p); return err == nil }
 
+func platformCommand(string, []string) bool { return false }
+
 // runAdd appends host names to the system-wide list.
 func runAdd(args []string) {
 	fs := flag.NewFlagSet("add", flag.ExitOnError)

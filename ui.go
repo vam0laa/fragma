@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"runtime"
 	"strings"
 	"unicode/utf8"
 )
@@ -25,11 +24,8 @@ var colorOn = func() bool {
 	if os.Getenv("NO_COLOR") != "" {
 		return false
 	}
-	if runtime.GOOS == "windows" && os.Getenv("WT_SESSION") == "" {
-		return false // legacy console: no ANSI colors
-	}
 	st, err := os.Stdout.Stat()
-	return err == nil && st.Mode()&os.ModeCharDevice != 0
+	return err == nil && st.Mode()&os.ModeCharDevice != 0 && ansiOK()
 }()
 
 func paint(code, s string) string {
